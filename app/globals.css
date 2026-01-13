@@ -13,3 +13,8 @@ body {
 .badge {
   @apply rounded-full bg-slate-800 px-3 py-1 text-xs font-medium text-slate-200;
 }
+
+:root {
+  --primary: #3b82f6;
+  --accent: #8b5cf6;
+}

@@ -2,6 +2,7 @@ import './globals.css';
 import type { Metadata } from 'next';
 import Link from 'next/link';
 import { CalendarDays, Coins, LayoutDashboard, ListTodo, Settings } from 'lucide-react';
+import QuickAddButton from './components/QuickAddButton';
 
 export const metadata: Metadata = {
   title: 'Smart Calendar Planner + Finance',
@@ -49,9 +50,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
                 <h1 className="text-xl font-semibold text-white">Smart Calendar Planner + Finance</h1>
               </div>
               <div className="flex items-center gap-4">
-                <button className="rounded-full bg-primary px-4 py-2 text-sm font-semibold text-white">
-                  Quick Add
-                </button>
+                <QuickAddButton />
                 <span className="badge">Local-only mode</span>
               </div>
             </header>

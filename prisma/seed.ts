@@ -1,4 +1,4 @@
-import { PrismaClient, CategoryType, TransactionType, CalendarItemType } from '@prisma/client';
+import { PrismaClient } from '@prisma/client';
 
 const prisma = new PrismaClient();
 
@@ -7,14 +7,31 @@ async function main() {
   await prisma.transaction.deleteMany();
   await prisma.budget.deleteMany();
   await prisma.category.deleteMany();
+  
+  // Create default settings if not exists
+  const existingSettings = await prisma.settings.findUnique({
+    where: { id: 'settings' }
+  });
+  if (!existingSettings) {
+    await prisma.settings.create({
+      data: {
+        id: 'settings',
+        theme: 'dark',
+        currency: 'VND',
+        language: 'Tiếng Việt',
+        dailyUsageCount: 0,
+        lastUsageDate: null
+      }
+    });
+  }
 
   const categories = await prisma.category.createMany({
     data: [
-      { name: 'Food & Drink', type: CategoryType.EXPENSE, icon: 'coffee' },
-      { name: 'Transport', type: CategoryType.EXPENSE, icon: 'bus' },
-      { name: 'Study', type: CategoryType.EXPENSE, icon: 'book' },
-      { name: 'Salary', type: CategoryType.INCOME, icon: 'wallet' },
-      { name: 'Freelance', type: CategoryType.INCOME, icon: 'sparkle' }
+      { name: 'Food & Drink', type: 'EXPENSE', icon: 'coffee' },
+      { name: 'Transport', type: 'EXPENSE', icon: 'bus' },
+      { name: 'Study', type: 'EXPENSE', icon: 'book' },
+      { name: 'Salary', type: 'INCOME', icon: 'wallet' },
+      { name: 'Freelance', type: 'INCOME', icon: 'sparkle' }
     ]
   });
 
@@ -28,7 +45,7 @@ async function main() {
 
   const lunch = await prisma.transaction.create({
     data: {
-      type: TransactionType.EXPENSE,
+      type: 'EXPENSE',
       amount: 45000,
       currency: 'VND',
       categoryId: food.id,
@@ -39,7 +56,7 @@ async function main() {
 
   await prisma.transaction.create({
     data: {
-      type: TransactionType.INCOME,
+      type: 'INCOME',
       amount: 2000000,
       currency: 'VND',
       categoryId: salary.id,
@@ -51,20 +68,22 @@ async function main() {
   await prisma.calendarItem.createMany({
     data: [
       {
-        type: CalendarItemType.TASK,
+        type: 'TASK',
         title: 'Hoàn thành IELTS Reading',
         description: '2h luyện tập mỗi ngày',
         startAt: new Date(),
         dueAt: new Date(Date.now() + 5 * 24 * 60 * 60 * 1000),
-        tags: 'study,ielts'
+        tags: 'study,ielts',
+        status: 'TODO'
       },
       {
-        type: CalendarItemType.FINANCE_REMINDER,
+        type: 'FINANCE_REMINDER',
         title: 'Nhắc chi ăn trưa',
         description: 'Chi 45k ăn trưa',
         startAt: new Date(),
         tags: 'finance,food',
-        linkTransactionId: lunch.id
+        linkTransactionId: lunch.id,
+        status: 'TODO'
       }
     ]
   });

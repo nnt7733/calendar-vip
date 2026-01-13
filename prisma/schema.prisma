@@ -7,80 +7,63 @@ datasource db {
   url      = "file:./dev.db"
 }
 
-enum TransactionType {
-  INCOME
-  EXPENSE
-}
-
-enum PaymentMethod {
-  CASH
-  BANK
-  EWALLET
-}
-
-enum CalendarItemType {
-  TASK
-  NOTE
-  EVENT
-  FINANCE_REMINDER
-}
-
-enum CalendarStatus {
-  TODO
-  DONE
-}
-
-enum CategoryType {
-  INCOME
-  EXPENSE
-  BOTH
-}
-
+// SQLite doesn't support enums, so we use String with default values
 model Transaction {
-  id            String          @id @default(cuid())
-  type          TransactionType
+  id            String   @id @default(cuid())
+  type          String   // INCOME | EXPENSE
   amount        Int
   currency      String
   categoryId    String
   note          String
   dateAt        DateTime
-  paymentMethod PaymentMethod?
-  isRecurring   Boolean         @default(false)
+  paymentMethod String?  // CASH | BANK | EWALLET
+  isRecurring   Boolean  @default(false)
   recurringRule String?
-  createdAt     DateTime        @default(now())
-  category      Category        @relation(fields: [categoryId], references: [id])
+  createdAt     DateTime @default(now())
+  category      Category @relation(fields: [categoryId], references: [id])
   reminders     CalendarItem[]
 }
 
 model Category {
-  id           String         @id @default(cuid())
+  id           String        @id @default(cuid())
   name         String
   icon         String?
-  type         CategoryType
+  type         String        // INCOME | EXPENSE | BOTH
   transactions Transaction[]
   budgets      Budget[]
 }
 
 model Budget {
-  id           String   @id @default(cuid())
+  id           String    @id @default(cuid())
   month        String
   categoryId   String?
   limitAmount  Int
-  alertPercent Int      @default(80)
-  createdAt    DateTime @default(now())
+  alertPercent Int       @default(80)
+  createdAt    DateTime  @default(now())
   category     Category? @relation(fields: [categoryId], references: [id])
 }
 
 model CalendarItem {
-  id                String           @id @default(cuid())
-  type              CalendarItemType
+  id                String      @id @default(cuid())
+  type              String      // TASK | NOTE | EVENT | FINANCE_REMINDER
   title             String
   description       String
   startAt           DateTime?
   endAt             DateTime?
   dueAt             DateTime?
-  status            CalendarStatus   @default(TODO)
+  status            String      @default("TODO") // TODO | DONE
   tags              String
   linkTransactionId String?
-  transaction       Transaction?     @relation(fields: [linkTransactionId], references: [id])
+  transaction       Transaction? @relation(fields: [linkTransactionId], references: [id])
+}
+
+model Settings {
+  id        String   @id @default("settings")
+  groqApiKey String?  // Groq API Key (encrypted in production)
+  theme     String   @default("dark") // dark | light
+  currency  String   @default("VND")
+  language  String   @default("Tiếng Việt")
+  dailyUsageCount Int @default(0) // Số lần sử dụng AI hôm nay
+  lastUsageDate String? // Ngày sử dụng cuối (YYYY-MM-DD)
+  updatedAt DateTime @default(now()) @updatedAt
 }
