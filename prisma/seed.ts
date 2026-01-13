@@ -2,20 +2,32 @@ import { PrismaClient } from '@prisma/client';
 
 const prisma = new PrismaClient();
 
+// Example userId for seeding (replace with actual Clerk user ID in production)
+const EXAMPLE_USER_ID = process.env.SEED_USER_ID || 'user_example123';
+
 async function main() {
-  await prisma.calendarItem.deleteMany();
-  await prisma.transaction.deleteMany();
-  await prisma.budget.deleteMany();
-  await prisma.category.deleteMany();
+  // Delete all data for the example user (for development/testing)
+  await prisma.calendarItem.deleteMany({
+    where: { userId: EXAMPLE_USER_ID }
+  });
+  await prisma.transaction.deleteMany({
+    where: { userId: EXAMPLE_USER_ID }
+  });
+  await prisma.budget.deleteMany({
+    where: { userId: EXAMPLE_USER_ID }
+  });
+  await prisma.category.deleteMany({
+    where: { userId: EXAMPLE_USER_ID }
+  });
   
-  // Create default settings if not exists
+  // Create default settings if not exists (One-to-One with User)
   const existingSettings = await prisma.settings.findUnique({
-    where: { id: 'settings' }
+    where: { userId: EXAMPLE_USER_ID }
   });
   if (!existingSettings) {
     await prisma.settings.create({
       data: {
-        id: 'settings',
+        userId: EXAMPLE_USER_ID,
         theme: 'dark',
         currency: 'VND',
         language: 'Tiếng Việt',
@@ -27,11 +39,11 @@ async function main() {
 
   const categories = await prisma.category.createMany({
     data: [
-      { name: 'Food & Drink', type: 'EXPENSE', icon: 'coffee' },
-      { name: 'Transport', type: 'EXPENSE', icon: 'bus' },
-      { name: 'Study', type: 'EXPENSE', icon: 'book' },
-      { name: 'Salary', type: 'INCOME', icon: 'wallet' },
-      { name: 'Freelance', type: 'INCOME', icon: 'sparkle' }
+      { userId: EXAMPLE_USER_ID, name: 'Food & Drink', type: 'EXPENSE', icon: 'coffee' },
+      { userId: EXAMPLE_USER_ID, name: 'Transport', type: 'EXPENSE', icon: 'bus' },
+      { userId: EXAMPLE_USER_ID, name: 'Study', type: 'EXPENSE', icon: 'book' },
+      { userId: EXAMPLE_USER_ID, name: 'Salary', type: 'INCOME', icon: 'wallet' },
+      { userId: EXAMPLE_USER_ID, name: 'Freelance', type: 'INCOME', icon: 'sparkle' }
     ]
   });
 
@@ -45,6 +57,7 @@ async function main() {
 
   const lunch = await prisma.transaction.create({
     data: {
+      userId: EXAMPLE_USER_ID,
       type: 'EXPENSE',
       amount: 45000,
       currency: 'VND',
@@ -56,6 +69,7 @@ async function main() {
 
   await prisma.transaction.create({
     data: {
+      userId: EXAMPLE_USER_ID,
       type: 'INCOME',
       amount: 2000000,
       currency: 'VND',
@@ -68,6 +82,7 @@ async function main() {
   await prisma.calendarItem.createMany({
     data: [
       {
+        userId: EXAMPLE_USER_ID,
         type: 'TASK',
         title: 'Hoàn thành IELTS Reading',
         description: '2h luyện tập mỗi ngày',
@@ -77,6 +92,7 @@ async function main() {
         status: 'TODO'
       },
       {
+        userId: EXAMPLE_USER_ID,
         type: 'FINANCE_REMINDER',
         title: 'Nhắc chi ăn trưa',
         description: 'Chi 45k ăn trưa',
@@ -90,6 +106,7 @@ async function main() {
 
   await prisma.budget.create({
     data: {
+      userId: EXAMPLE_USER_ID,
       month: '2024-10',
       categoryId: food.id,
       limitAmount: 1500000,

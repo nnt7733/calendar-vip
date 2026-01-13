@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { quickAddParser } from '@/lib/ai';
 import { prisma } from '@/lib/db';
+import { getUserIdOrDev } from '@/lib/auth';
 
 const planSchema = z.object({
   input: z.string().min(1)
@@ -10,18 +11,20 @@ const planSchema = z.object({
 // Giới hạn sử dụng AI mỗi ngày (có thể điều chỉnh)
 const DAILY_AI_LIMIT = 1000; // Giới hạn 1000 lần/ngày (Groq free tier: 14,400/ngày)
 
-async function checkAndUpdateUsage(): Promise<{ allowed: boolean; remaining: number; dailyCount: number }> {
+async function checkAndUpdateUsage(
+  userId: string
+): Promise<{ allowed: boolean; remaining: number; dailyCount: number; today: string }> {
   try {
     const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
     const settings = await prisma.settings.findUnique({
-      where: { id: 'settings' }
+      where: { userId }
     });
 
     if (!settings) {
       // Tạo default settings nếu chưa có
       await prisma.settings.create({
         data: {
-          id: 'settings',
+          userId,
           theme: 'dark',
           currency: 'VND',
           language: 'Tiếng Việt',
@@ -29,58 +32,51 @@ async function checkAndUpdateUsage(): Promise<{ allowed: boolean; remaining: num
           lastUsageDate: today
         }
       });
-      return { allowed: true, remaining: DAILY_AI_LIMIT, dailyCount: 0 };
+      return { allowed: true, remaining: DAILY_AI_LIMIT, dailyCount: 0, today };
     }
 
     // Reset counter nếu là ngày mới
     if (settings.lastUsageDate !== today) {
       await prisma.settings.update({
-        where: { id: 'settings' },
+        where: { userId },
         data: {
           dailyUsageCount: 0,
           lastUsageDate: today
         }
       });
-      return { allowed: true, remaining: DAILY_AI_LIMIT, dailyCount: 0 };
+      return { allowed: true, remaining: DAILY_AI_LIMIT, dailyCount: 0, today };
     }
 
     // Kiểm tra giới hạn
     const dailyCount = settings.dailyUsageCount || 0;
     const remaining = Math.max(0, DAILY_AI_LIMIT - dailyCount);
     const allowed = dailyCount < DAILY_AI_LIMIT;
-
-    if (allowed) {
-      // Tăng counter
-      await prisma.settings.update({
-        where: { id: 'settings' },
-        data: {
-          dailyUsageCount: dailyCount + 1,
-          lastUsageDate: today
-        }
-      });
-    }
-
-    return { allowed, remaining: Math.max(0, remaining - 1), dailyCount: dailyCount + 1 };
+    return { allowed, remaining, dailyCount, today };
   } catch (error) {
     console.error('Usage check error:', error);
     // Nếu có lỗi, vẫn cho phép sử dụng (fallback)
-    return { allowed: true, remaining: DAILY_AI_LIMIT, dailyCount: 0 };
+    return { allowed: true, remaining: DAILY_AI_LIMIT, dailyCount: 0, today: new Date().toISOString().split('T')[0] };
   }
 }
 
 export async function POST(request: Request) {
   try {
+    const userId = await getUserIdOrDev();
+    if (!userId) {
+      return NextResponse.json('Unauthorized', { status: 401 });
+    }
+
     const data = await request.json();
     const parsed = planSchema.parse(data);
 
     // Kiểm tra giới hạn sử dụng
-    const usage = await checkAndUpdateUsage();
+    const usage = await checkAndUpdateUsage(userId);
     
     if (!usage.allowed) {
       return NextResponse.json(
         {
           clarifyingQuestion: null,
-          assumptions: [`Đã đạt giới hạn sử dụng AI hôm nay (${usage.dailyCount}/${DAILY_AI_LIMIT}). Vui lòng thử lại vào ngày mai hoặc sử dụng rule-based parsing.`],
+          assumptions: [`Da dat gioi han su dung AI hom nay (${usage.dailyCount}/${DAILY_AI_LIMIT}). Vui long thu lai vao ngay mai hoac su dung rule-based parsing.`],
           create: {
             calendarItems: [],
             transactions: []
@@ -94,16 +90,60 @@ export async function POST(request: Request) {
         { status: 429 } // Too Many Requests
       );
     }
+    const reserveResult = await prisma.settings.updateMany({
+      where: {
+        userId,
+        lastUsageDate: usage.today,
+        dailyUsageCount: { lt: DAILY_AI_LIMIT }
+      },
+      data: {
+        dailyUsageCount: { increment: 1 },
+        lastUsageDate: usage.today
+      }
+    });
 
-    const result = await quickAddParser(parsed.input);
-    
-    // Thêm thông tin usage vào response
+    if (reserveResult.count === 0) {
+      return NextResponse.json(
+        {
+          clarifyingQuestion: null,
+          assumptions: [`Da dat gioi han su dung AI hom nay (${usage.dailyCount}/${DAILY_AI_LIMIT}). Vui long thu lai vao ngay mai hoac su dung rule-based parsing.`],
+          create: {
+            calendarItems: [],
+            transactions: []
+          },
+          usage: {
+            dailyCount: usage.dailyCount,
+            limit: DAILY_AI_LIMIT,
+            remaining: 0
+          }
+        },
+        { status: 429 }
+      );
+    }
+
+    let result;
+    try {
+      result = await quickAddParser(parsed.input);
+    } catch (error) {
+      await prisma.settings.update({
+        where: { userId },
+        data: { dailyUsageCount: { decrement: 1 } }
+      });
+      throw error;
+    }
+
+    const settingsAfter = await prisma.settings.findUnique({
+      where: { userId }
+    });
+    const dailyCount = settingsAfter?.dailyUsageCount ?? usage.dailyCount + 1;
+    const remaining = Math.max(0, DAILY_AI_LIMIT - dailyCount);
+
     return NextResponse.json({
       ...result,
       usage: {
-        dailyCount: usage.dailyCount,
+        dailyCount,
         limit: DAILY_AI_LIMIT,
-        remaining: usage.remaining
+        remaining
       }
     });
   } catch (error: any) {
@@ -111,7 +151,7 @@ export async function POST(request: Request) {
     return NextResponse.json(
       {
         clarifyingQuestion: null,
-        assumptions: ['Có lỗi xảy ra khi parse input.'],
+        assumptions: ['Co loi xay ra khi parse input.'],
         create: {
           calendarItems: [],
           transactions: []

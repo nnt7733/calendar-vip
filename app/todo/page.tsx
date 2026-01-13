@@ -37,7 +37,7 @@ export default function TodoPage() {
     try {
       const res = await fetch('/api/calendar-items');
       const data = await res.json();
-      setItems(data);
+      setItems(Array.isArray(data) ? data : []);
     } catch (error) {
       console.error('Failed to fetch items:', error);
     } finally {

@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
+import { getUserIdOrDev } from '@/lib/auth';
 
 const testApiKeySchema = z.object({
   apiKey: z.string().min(1)
@@ -7,6 +8,11 @@ const testApiKeySchema = z.object({
 
 export async function POST(request: Request) {
   try {
+    const userId = await getUserIdOrDev();
+    if (!userId) {
+      return NextResponse.json('Unauthorized', { status: 401 });
+    }
+
     const data = await request.json();
     const parsed = testApiKeySchema.parse(data);
     const { apiKey } = parsed;
@@ -14,9 +20,9 @@ export async function POST(request: Request) {
     // Validate format: Groq API key should start with "gsk_"
     if (!apiKey.startsWith('gsk_')) {
       return NextResponse.json(
-        { 
+        {
           valid: false,
-          error: 'API key không đúng format. Groq API key phải bắt đầu bằng "gsk_"' 
+          error: 'API key khong dung format. Groq API key phai bat dau bang "gsk_"'
         },
         { status: 400 }
       );
@@ -42,17 +48,17 @@ export async function POST(request: Request) {
       if (completion.choices && completion.choices.length > 0) {
         return NextResponse.json({
           valid: true,
-          message: 'API key hợp lệ và hoạt động tốt!'
+          message: 'API key hop le va hoat dong tot!'
         });
-      } else {
-        return NextResponse.json(
-          { 
-            valid: false,
-            error: 'API key không trả về kết quả hợp lệ' 
-          },
-          { status: 400 }
-        );
       }
+
+      return NextResponse.json(
+        {
+          valid: false,
+          error: 'API key khong tra ve ket qua hop le'
+        },
+        { status: 400 }
+      );
     } catch (groqError: any) {
       console.error('Groq API test error:', groqError);
       
@@ -61,16 +67,16 @@ export async function POST(request: Request) {
         return NextResponse.json(
           { 
             valid: false,
-            error: 'API key không hợp lệ hoặc đã hết hạn' 
+            error: 'API key khong hop le hoac da het han'
           },
           { status: 401 }
         );
       }
       
       return NextResponse.json(
-        { 
+        {
           valid: false,
-          error: `Lỗi khi kiểm tra API key: ${groqError.message || 'Unknown error'}` 
+          error: 'Loi khi kiem tra API key'
         },
         { status: 500 }
       );
@@ -80,7 +86,7 @@ export async function POST(request: Request) {
     return NextResponse.json(
       { 
         valid: false,
-        error: error.message || 'Có lỗi xảy ra khi kiểm tra API key' 
+        error: error.message || 'Co loi xay ra khi kiem tra API key' 
       },
       { status: 500 }
     );

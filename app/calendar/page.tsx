@@ -69,7 +69,7 @@ const getItemColor = (type: string, status: string, daysUntilDue: number | null,
     case 'EVENT':
       return 'bg-purple-500/20 border-purple-500/50 text-purple-300';
     case 'FINANCE_REMINDER':
-      return 'bg-green-500/20 border-green-500/50 text-green-300';
+      return 'bg-slate-700/40 border-slate-600 text-slate-300';
     case 'NOTE':
       return 'bg-yellow-500/20 border-yellow-500/50 text-yellow-300';
     default:
@@ -124,8 +124,8 @@ export default function CalendarPage() {
       ]);
       const itemsData = await itemsRes.json();
       const transactionsData = await transactionsRes.json();
-      setItems(itemsData);
-      setTransactions(transactionsData);
+      setItems(Array.isArray(itemsData) ? itemsData : []);
+      setTransactions(Array.isArray(transactionsData) ? transactionsData : []);
     } catch (error) {
       console.error('Failed to fetch data:', error);
     } finally {
@@ -174,7 +174,10 @@ export default function CalendarPage() {
   const weekDays = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
   const formatCurrency = (amount: number) => {
-    return new Intl.NumberFormat('vi-VN').format(amount) + ' VND';
+    if (amount >= 1000) {
+      return `${Math.round(amount / 1000)}k`;
+    }
+    return `${amount}`;
   };
 
   return (
@@ -348,17 +351,20 @@ export default function CalendarPage() {
                       })}
                       {/* Transactions (if finance view) */}
                       {viewMode !== 'tasks' &&
-                        dayTransactions.slice(0, dayItems.length < 3 ? 3 - dayItems.length : 0).map((trans) => (
-                          <div
-                            key={trans.id}
-                            className="text-xs px-2 py-1 rounded border truncate flex items-center gap-1 bg-green-500/20 border-green-500/50 text-green-300"
-                            title={trans.note}
-                          >
-                            <DollarSign className="h-2.5 w-2.5" />
-                            {trans.type === 'EXPENSE' ? '-' : '+'}
-                            {formatCurrency(trans.amount)}
-                          </div>
-                        ))}
+                        dayTransactions.slice(0, dayItems.length < 3 ? 3 - dayItems.length : 0).map((trans) => {
+                          const isExpense = trans.type === 'EXPENSE';
+                          return (
+                            <div
+                              key={trans.id}
+                              className="text-xs px-2 py-1 rounded border truncate flex items-center gap-1 bg-slate-800/60 border-slate-700 text-slate-300"
+                              title={trans.note}
+                            >
+                              <DollarSign className="h-2.5 w-2.5" />
+                              {isExpense ? '-' : '+'}
+                              {formatCurrency(trans.amount)}
+                            </div>
+                          );
+                        })}
                       {(dayItems.length + (viewMode !== 'tasks' ? dayTransactions.length : 0)) > 3 && (
                         <div className="text-xs text-slate-500 px-2">
                           +{dayItems.length + (viewMode !== 'tasks' ? dayTransactions.length : 0) - 3} more
@@ -411,27 +417,29 @@ export default function CalendarPage() {
                       <div className="flex items-start justify-between">
                         <div className="flex-1">
                           <div className="flex items-center gap-2 mb-1">
-                            <input
-                              type="checkbox"
-                              checked={item.status === 'DONE'}
-                              onChange={async () => {
-                                const newStatus = item.status === 'DONE' ? 'TODO' : 'DONE';
-                                try {
-                                  await fetch('/api/calendar-items', {
-                                    method: 'PATCH',
-                                    headers: { 'Content-Type': 'application/json' },
-                                    body: JSON.stringify({
-                                      id: item.id,
-                                      status: newStatus
-                                    })
-                                  });
-                                  await fetchData();
-                                } catch (error) {
-                                  console.error('Failed to update status:', error);
-                                }
-                              }}
-                              className="h-4 w-4 rounded border-slate-600 bg-slate-800 text-primary focus:ring-primary"
-                            />
+                            {item.type !== 'FINANCE_REMINDER' && (
+                              <input
+                                type="checkbox"
+                                checked={item.status === 'DONE'}
+                                onChange={async () => {
+                                  const newStatus = item.status === 'DONE' ? 'TODO' : 'DONE';
+                                  try {
+                                    await fetch('/api/calendar-items', {
+                                      method: 'PATCH',
+                                      headers: { 'Content-Type': 'application/json' },
+                                      body: JSON.stringify({
+                                        id: item.id,
+                                        status: newStatus
+                                      })
+                                    });
+                                    await fetchData();
+                                  } catch (error) {
+                                    console.error('Failed to update status:', error);
+                                  }
+                                }}
+                                className="h-4 w-4 rounded border-slate-600 bg-slate-800 text-primary focus:ring-primary"
+                              />
+                            )}
                             {isHighPriority && (
                               <Star className="h-4 w-4 fill-yellow-400 text-yellow-400" />
                             )}

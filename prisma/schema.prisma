@@ -3,13 +3,16 @@ generator client {
 }
 
 datasource db {
-  provider = "sqlite"
-  url      = "file:./dev.db"
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
 }
 
-// SQLite doesn't support enums, so we use String with default values
+// Multi-tenant schema with Clerk Auth
+// All models include userId for tenant isolation
+
 model Transaction {
   id            String   @id @default(cuid())
+  userId        String   // Clerk user ID
   type          String   // INCOME | EXPENSE
   amount        Int
   currency      String
@@ -22,29 +25,38 @@ model Transaction {
   createdAt     DateTime @default(now())
   category      Category @relation(fields: [categoryId], references: [id])
   reminders     CalendarItem[]
+
+  @@index([userId])
 }
 
 model Category {
   id           String        @id @default(cuid())
+  userId       String        // Clerk user ID
   name         String
   icon         String?
   type         String        // INCOME | EXPENSE | BOTH
   transactions Transaction[]
   budgets      Budget[]
+
+  @@index([userId])
 }
 
 model Budget {
   id           String    @id @default(cuid())
+  userId       String    // Clerk user ID
   month        String
   categoryId   String?
   limitAmount  Int
   alertPercent Int       @default(80)
   createdAt    DateTime  @default(now())
   category     Category? @relation(fields: [categoryId], references: [id])
+
+  @@index([userId])
 }
 
 model CalendarItem {
   id                String      @id @default(cuid())
+  userId            String      // Clerk user ID
   type              String      // TASK | NOTE | EVENT | FINANCE_REMINDER
   title             String
   description       String
@@ -55,15 +67,20 @@ model CalendarItem {
   tags              String
   linkTransactionId String?
   transaction       Transaction? @relation(fields: [linkTransactionId], references: [id])
+
+  @@index([userId])
 }
 
 model Settings {
-  id        String   @id @default("settings")
-  groqApiKey String?  // Groq API Key (encrypted in production)
-  theme     String   @default("dark") // dark | light
-  currency  String   @default("VND")
-  language  String   @default("Tiếng Việt")
-  dailyUsageCount Int @default(0) // Số lần sử dụng AI hôm nay
-  lastUsageDate String? // Ngày sử dụng cuối (YYYY-MM-DD)
-  updatedAt DateTime @default(now()) @updatedAt
+  id             String   @id @default(cuid())
+  userId         String   @unique // Clerk user ID - One-to-One with User
+  groqApiKey     String?  // Groq API Key (encrypted in production)
+  theme          String   @default("dark") // dark | light
+  currency       String   @default("VND")
+  language       String   @default("Tiếng Việt")
+  dailyUsageCount Int     @default(0) // Số lần sử dụng AI hôm nay
+  lastUsageDate  String? // Ngày sử dụng cuối (YYYY-MM-DD)
+  updatedAt      DateTime @default(now()) @updatedAt
+
+  @@index([userId])
 }

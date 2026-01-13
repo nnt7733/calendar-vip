@@ -91,10 +91,13 @@ export default function QuickAddModal({ isOpen, onClose, onSuccess }: QuickAddMo
       // Create preview
       const calendarItem = hasCalendarItems ? result.create.calendarItems[0] : null;
       const transaction = hasTransactions ? result.create.transactions[0] : null;
+      const previewTitle = hasTransactions
+        ? `${Math.round((transaction?.amount || 0) / 1000)}k`
+        : (calendarItem?.title || input);
 
       const preview: ParsedResult = {
         type: hasTransactions ? 'TRANSACTION' : (calendarItem?.type as any || 'TASK'),
-        title: calendarItem?.title || transaction?.note || input,
+        title: previewTitle,
         description: calendarItem?.description || transaction?.note || '',
         date: calendarItem?.startAt || calendarItem?.dueAt || transaction?.dateAt 
           ? new Date(calendarItem?.startAt || calendarItem?.dueAt || transaction?.dateAt) 
@@ -331,7 +334,7 @@ export default function QuickAddModal({ isOpen, onClose, onSuccess }: QuickAddMo
                   <div>
                     <p className="text-xs text-slate-400 mb-1">Số tiền</p>
                     <p className="text-sm font-semibold text-green-400">
-                      {new Intl.NumberFormat('vi-VN').format(parsedResult.amount)} VND
+                      {Math.round(parsedResult.amount / 1000)}k
                     </p>
                   </div>
                 )}

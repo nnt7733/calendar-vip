@@ -58,16 +58,17 @@ export default function FinancePage() {
       ]);
 
       const transactionsData = await transactionsRes.json();
-      setTransactions(transactionsData);
+      setTransactions(Array.isArray(transactionsData) ? transactionsData : []);
 
       // Try to get categories from transactions or create default list
       if (categoriesRes) {
         const categoriesData = await categoriesRes.json();
-        setCategories(categoriesData);
+        setCategories(Array.isArray(categoriesData) ? categoriesData : []);
       } else {
         // Extract unique categories from transactions
+        const safeTransactions = Array.isArray(transactionsData) ? transactionsData : [];
         const uniqueCategories = Array.from(
-          new Map(transactionsData.map((t: Transaction) => [t.category.id, t.category])).values()
+          new Map(safeTransactions.map((t: Transaction) => [t.category.id, t.category])).values()
         );
         setCategories(uniqueCategories as any);
       }
@@ -120,7 +121,10 @@ export default function FinancePage() {
   };
 
   const formatCurrency = (amount: number) => {
-    return new Intl.NumberFormat('vi-VN').format(amount) + ' VND';
+    if (amount >= 1000) {
+      return `${Math.round(amount / 1000)}k`;
+    }
+    return `${amount}`;
   };
 
   const totalIncome = transactions

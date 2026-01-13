@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { prisma } from '@/lib/db';
+import { getUserIdOrDev } from '@/lib/auth';
 
 const settingsSchema = z.object({
   groqApiKey: z.string().optional().nullable(),
@@ -10,16 +11,22 @@ const settingsSchema = z.object({
 });
 
 export async function GET() {
+  const userId = await getUserIdOrDev();
+  if (!userId) {
+    return NextResponse.json('Unauthorized', { status: 401 });
+  }
+
   try {
+
     let settings = await prisma.settings.findUnique({
-      where: { id: 'settings' }
+      where: { userId }
     });
 
     // Create default settings if not exists
     if (!settings) {
       settings = await prisma.settings.create({
         data: {
-          id: 'settings',
+          userId,
           theme: 'dark',
           currency: 'VND',
           language: 'Tiếng Việt'
@@ -36,31 +43,34 @@ export async function GET() {
     });
   } catch (error: any) {
     console.error('Failed to fetch settings:', error);
-    // Return defaults on error
-    return NextResponse.json({
-      id: 'settings',
-      groqApiKey: null,
-      theme: 'dark',
-      currency: 'VND',
-      language: 'Tiếng Việt',
-      updatedAt: new Date().toISOString()
-    });
+    return NextResponse.json(
+      {
+        error: 'Failed to fetch settings',
+        message: error.message || 'Unknown error'
+      },
+      { status: 500 }
+    );
   }
 }
 
 export async function PATCH(request: Request) {
   try {
+    const userId = await getUserIdOrDev();
+    if (!userId) {
+      return NextResponse.json('Unauthorized', { status: 401 });
+    }
+
     const data = await request.json();
     const parsed = settingsSchema.parse(data);
 
     let settings = await prisma.settings.findUnique({
-      where: { id: 'settings' }
+      where: { userId }
     });
 
     if (!settings) {
       settings = await prisma.settings.create({
         data: {
-          id: 'settings',
+          userId,
           groqApiKey: parsed.groqApiKey || null,
           theme: parsed.theme || 'dark',
           currency: parsed.currency || 'VND',
@@ -69,7 +79,7 @@ export async function PATCH(request: Request) {
       });
     } else {
       settings = await prisma.settings.update({
-        where: { id: 'settings' },
+        where: { userId },
         data: {
           ...(parsed.groqApiKey !== undefined && { groqApiKey: parsed.groqApiKey }),
           ...(parsed.theme && { theme: parsed.theme }),

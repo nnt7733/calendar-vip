@@ -15,6 +15,7 @@
     "setup": "npm install && npm run prisma:generate && npm run prisma:push && npm run seed"
   },
   "dependencies": {
+    "@clerk/nextjs": "^6.36.7",
     "@prisma/client": "^5.22.0",
     "clsx": "^2.1.1",
     "date-fns": "^3.6.0",

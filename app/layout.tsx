@@ -3,6 +3,7 @@ import type { Metadata } from 'next';
 import Link from 'next/link';
 import { CalendarDays, Coins, LayoutDashboard, ListTodo, Settings } from 'lucide-react';
 import QuickAddButton from './components/QuickAddButton';
+import { ClerkProvider, SignInButton, SignedIn, SignedOut, UserButton } from '@clerk/nextjs';
 
 export const metadata: Metadata = {
   title: 'Smart Calendar Planner + Finance',
@@ -19,9 +20,10 @@ const navItems = [
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="vi">
-      <body>
-        <div className="flex min-h-screen bg-slate-950">
+    <ClerkProvider>
+      <html lang="vi">
+        <body>
+          <div className="flex min-h-screen bg-slate-950">
           <aside className="hidden w-64 flex-col border-r border-slate-800 bg-slate-900/80 p-6 lg:flex">
             <div className="mb-8">
               <p className="text-lg font-semibold text-white">Smart Calendar</p>
@@ -46,11 +48,19 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           <div className="flex flex-1 flex-col">
             <header className="flex items-center justify-between border-b border-slate-800 bg-slate-950/80 px-6 py-4">
               <div>
-                <p className="text-sm text-slate-400">Xin chào 👋</p>
+                <p className="text-sm text-slate-400">Xin chao</p>
                 <h1 className="text-xl font-semibold text-white">Smart Calendar Planner + Finance</h1>
               </div>
               <div className="flex items-center gap-4">
-                <QuickAddButton />
+                <SignedOut>
+                  <SignInButton />
+                </SignedOut>
+                <SignedIn>
+                  <UserButton />
+                </SignedIn>
+                <SignedIn>
+                  <QuickAddButton />
+                </SignedIn>
                 <span className="badge">Local-only mode</span>
               </div>
             </header>
@@ -58,8 +68,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               {children}
             </main>
           </div>
-        </div>
-      </body>
-    </html>
+          </div>
+        </body>
+      </html>
+    </ClerkProvider>
   );
 }

@@ -46,8 +46,8 @@ export default function DashboardPage() {
       ]);
       const itemsData = await itemsRes.json();
       const transactionsData = await transactionsRes.json();
-      setItems(itemsData);
-      setTransactions(transactionsData);
+      setItems(Array.isArray(itemsData) ? itemsData : []);
+      setTransactions(Array.isArray(transactionsData) ? transactionsData : []);
     } catch (error) {
       console.error('Failed to fetch data:', error);
     } finally {
@@ -56,7 +56,10 @@ export default function DashboardPage() {
   };
 
   const formatCurrency = (amount: number) => {
-    return new Intl.NumberFormat('vi-VN').format(amount) + ' VND';
+    if (amount >= 1000) {
+      return `${Math.round(amount / 1000)}k`;
+    }
+    return `${amount}`;
   };
 
   const today = new Date();

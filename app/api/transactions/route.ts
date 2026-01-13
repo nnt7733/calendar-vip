@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { prisma } from '@/lib/db';
+import { getUserIdOrDev } from '@/lib/auth';
 
 const transactionSchema = z.object({
   type: z.enum(['INCOME', 'EXPENSE']),
@@ -15,7 +16,13 @@ const transactionSchema = z.object({
 });
 
 export async function GET() {
+  const userId = await getUserIdOrDev();
+  if (!userId) {
+    return NextResponse.json('Unauthorized', { status: 401 });
+  }
+
   const transactions = await prisma.transaction.findMany({
+    where: { userId },
     include: { category: true },
     orderBy: { dateAt: 'desc' }
   });
@@ -23,12 +30,18 @@ export async function GET() {
 }
 
 export async function POST(request: Request) {
+  const userId = await getUserIdOrDev();
+  if (!userId) {
+    return NextResponse.json('Unauthorized', { status: 401 });
+  }
+
   const data = await request.json();
   const parsed = transactionSchema.parse(data);
 
   const transaction = await prisma.transaction.create({
     data: {
       ...parsed,
+      userId,
       dateAt: new Date(parsed.dateAt)
     },
     include: { category: true }
@@ -46,7 +59,8 @@ export async function POST(request: Request) {
         dueAt: new Date(parsed.dateAt),
         status: 'TODO',
         tags: 'finance',
-        linkTransactionId: transaction.id
+        userId,
+        transaction: { connect: { id: transaction.id } }
       }
     });
   } catch (error) {

@@ -9,22 +9,32 @@ try {
   console.log('Groq SDK not available, using rule-based parsing');
 }
 
-const expenseKeywords = ['chi', 'mua', 'trả', 'ăn', 'cafe'];
-const incomeKeywords = ['thu', 'nhận', 'lương'];
+const expenseKeywords = ['chi', 'mua', 'tra', 'an', 'uong', 'cafe'];
+const incomeKeywords = ['thu', 'nhan', 'luong'];
 
 const categoryMap: Record<string, string> = {
-  'ăn': 'Food',
+  'an': 'Food',
   'cafe': 'Food',
   'xe': 'Transport',
-  'xăng': 'Transport',
-  'sách': 'Study',
+  'xang': 'Transport',
+  'sach': 'Study',
   'course': 'Study',
-  'điện': 'Bills',
-  'nước': 'Bills'
+  'dien': 'Bills',
+  'nuoc': 'Bills'
 };
 
+function normalizeText(text: string) {
+  return text
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/đ/g, 'd')
+    .replace(/Đ/g, 'D')
+    .toLowerCase();
+}
+
+
 function detectType(text: string) {
-  const lower = text.toLowerCase();
+  const lower = normalizeText(text);
   if (expenseKeywords.some((key) => lower.includes(key))) {
     return 'EXPENSE';
   }
@@ -34,11 +44,13 @@ function detectType(text: string) {
   return null;
 }
 
+
 function detectCategory(text: string) {
-  const lower = text.toLowerCase();
+  const lower = normalizeText(text);
   const match = Object.keys(categoryMap).find((key) => lower.includes(key));
   return match ? categoryMap[match] : 'General';
 }
+
 
 function detectAmount(text: string) {
   const match = text.match(/(\d+[,.]?\d*)/);
@@ -48,46 +60,47 @@ function detectAmount(text: string) {
 }
 
 function detectDate(text: string, isEvent: boolean = false) {
-  const lower = text.toLowerCase();
+  const lower = normalizeText(text);
   let date = new Date();
-  
-  // Detect "hôm nay", "mai", "ngày mai"
-  if (lower.includes('hôm nay')) {
+
+  if (lower.includes('hom nay')) {
     date = new Date();
-  } else if (lower.includes('mai') || lower.includes('ngày mai')) {
+  } else if (lower.includes('mai') || lower.includes('ngay mai')) {
     date = addDays(new Date(), 1);
   } else {
-    // Detect day of week
     const today = new Date();
-    const currentDay = today.getDay(); // 0 = Sunday, 1 = Monday, ..., 6 = Saturday
-    
-    // Vietnamese day names
+    const currentDay = today.getDay();
+
     const dayMap: Record<string, number> = {
-      'chủ nhật': 0,
+      'chu nhat': 0,
       'cn': 0,
-      'thứ 2': 1,
-      'thứ hai': 1,
-      'thứ 3': 2,
-      'thứ ba': 2,
-      'thứ 4': 3,
-      'thứ tư': 3,
-      'thứ 5': 4,
-      'thứ năm': 4,
-      'thứ 6': 5,
-      'thứ sáu': 5,
-      'thứ 7': 6,
-      'thứ bảy': 6
+      'thu 2': 1,
+      'thu hai': 1,
+      't2': 1,
+      'thu 3': 2,
+      'thu ba': 2,
+      't3': 2,
+      'thu 4': 3,
+      'thu tu': 3,
+      't4': 3,
+      'thu 5': 4,
+      'thu nam': 4,
+      't5': 4,
+      'thu 6': 5,
+      'thu sau': 5,
+      't6': 5,
+      'thu 7': 6,
+      'thu bay': 6,
+      't7': 6
     };
-    
-    // Check for "tuần này" or "tuần sau"
-    const isThisWeek = lower.includes('tuần này') || lower.includes('tuần tới');
-    const isNextWeek = lower.includes('tuần sau');
-    
+
+    const isThisWeek = lower.includes('tuan nay') || lower.includes('tuan toi');
+    const isNextWeek = lower.includes('tuan sau');
+
     for (const [key, targetDay] of Object.entries(dayMap)) {
       if (lower.includes(key)) {
         const daysUntilTarget = (targetDay - currentDay + 7) % 7;
-        if (daysUntilTarget === 0 && !lower.includes('tuần này')) {
-          // If today is that day, assume next week
+        if (daysUntilTarget === 0 && !lower.includes('tuan nay')) {
           date = addDays(today, 7);
         } else if (isNextWeek) {
           date = addDays(today, 7 + daysUntilTarget);
@@ -97,68 +110,61 @@ function detectDate(text: string, isEvent: boolean = false) {
         break;
       }
     }
-    
-    // Detect date format DD/MM or DD/MM/YYYY
-    const dateMatch = text.match(/(\d{1,2})\/(\d{1,2})(?:\/(\d{4}))?/);
+
+    const dateMatch = lower.match(/(\d{1,2})\/(\d{1,2})(?:\/(\d{4}))?/);
     if (dateMatch) {
       const [day, month, year] = dateMatch.slice(1, 4).map(Number);
       const targetYear = year || new Date().getFullYear();
       date = parse(`${day}/${month}/${targetYear}`, 'd/M/yyyy', new Date());
     }
   }
-  
-  // For events (non-deadline), don't set specific time - just keep the date
+
   if (isEvent) {
-    // Reset to start of day (00:00:00) for events
     date.setHours(0, 0, 0, 0);
     return date;
   }
-  
-  // For tasks (deadlines), set specific time
+
   let hours = date.getHours();
   let minutes = date.getMinutes();
-  
-  // Time of day keywords - only for tasks with deadlines
-  if (lower.includes('sáng') || lower.includes('buổi sáng')) {
-    hours = 8; // Default morning
+
+  if (lower.includes('sang') || lower.includes('buoi sang')) {
+    hours = 8;
     minutes = 0;
-  } else if (lower.includes('trưa') || lower.includes('buổi trưa')) {
+  } else if (lower.includes('trua') || lower.includes('buoi trua')) {
     hours = 12;
     minutes = 0;
-  } else if (lower.includes('chiều') || lower.includes('buổi chiều')) {
-    hours = 14; // Default afternoon
+  } else if (lower.includes('chieu') || lower.includes('buoi chieu')) {
+    hours = 14;
     minutes = 0;
-  } else if (lower.includes('tối') || lower.includes('buổi tối')) {
-    hours = 19; // Default evening
+  } else if (lower.includes('toi') || lower.includes('buoi toi')) {
+    hours = 19;
     minutes = 0;
   }
-  
-  // Detect specific time like "7pm", "19:00", "7 giờ" - only for tasks
-  const timeMatch = text.match(/(\d{1,2})(?:pm|am|giờ|:(\d{2}))/i);
+
+  const timeMatch = lower.match(/(\d{1,2})(?:pm|am|h|gio|:(\d{2}))/i);
   if (timeMatch) {
-    hours = parseInt(timeMatch[1]);
-    if (text.toLowerCase().includes('pm') && hours < 12) hours += 12;
-    if (timeMatch[2]) minutes = parseInt(timeMatch[2]);
+    hours = parseInt(timeMatch[1], 10);
+    if (lower.includes('pm') && hours < 12) hours += 12;
+    if (timeMatch[2]) minutes = parseInt(timeMatch[2], 10);
   }
-  
+
   date.setHours(hours, minutes, 0, 0);
   return date;
 }
 
+
 function extractCleanTitle(text: string): string {
-  // Remove time-related keywords to get clean title
   const timeKeywords = [
-    'hôm nay', 'mai', 'ngày mai', 'tuần này', 'tuần sau', 'tuần tới',
-    'sáng', 'buổi sáng', 'trưa', 'buổi trưa', 'chiều', 'buổi chiều', 'tối', 'buổi tối',
-    'thứ 2', 'thứ hai', 'thứ 3', 'thứ ba', 'thứ 4', 'thứ tư', 'thứ 5', 'thứ năm',
-    'thứ 6', 'thứ sáu', 'thứ 7', 'thứ bảy', 'chủ nhật', 'cn',
-    /\d{1,2}\/\d{1,2}(?:\/\d{4})?/g, // Date format
-    /\d{1,2}(?:pm|am|giờ|:\d{2})/gi // Time format
+    'hom nay', 'mai', 'ngay mai', 'tuan nay', 'tuan sau', 'tuan toi',
+    'sang', 'buoi sang', 'trua', 'buoi trua', 'chieu', 'buoi chieu', 'toi', 'buoi toi',
+    'thu 2', 'thu hai', 't2', 'thu 3', 'thu ba', 't3', 'thu 4', 'thu tu', 't4', 'thu 5', 'thu nam',
+    't5', 'thu 6', 'thu sau', 't6', 'thu 7', 'thu bay', 't7', 'chu nhat', 'cn',
+    /\d{1,2}\/\d{1,2}(?:\/\d{4})?/g,
+    /\d{1,2}(?:pm|am|gio|h|:\d{2})/gi
   ];
-  
-  let cleanTitle = text;
-  
-  // Remove time keywords
+
+  let cleanTitle = normalizeText(text);
+
   timeKeywords.forEach(keyword => {
     if (typeof keyword === 'string') {
       cleanTitle = cleanTitle.replace(new RegExp(keyword, 'gi'), '');
@@ -166,42 +172,62 @@ function extractCleanTitle(text: string): string {
       cleanTitle = cleanTitle.replace(keyword, '');
     }
   });
-  
-  // Clean up extra spaces
+
   cleanTitle = cleanTitle.replace(/\s+/g, ' ').trim();
-  
-  return cleanTitle || text; // Fallback to original if empty
+  return cleanTitle || text;
 }
 
+
 function detectTags(text: string) {
-  const lower = text.toLowerCase();
+  const lower = normalizeText(text);
   const tags: string[] = [];
-  
-  // Priority detection
-  if (lower.includes('urgent') || lower.includes('khẩn cấp') || lower.includes('gấp')) {
+
+  if (lower.includes('urgent') || lower.includes('khan cap') || lower.includes('gap')) {
     tags.push('urgent', 'high');
-  } else if (lower.includes('quan trọng') || lower.includes('important') || lower.includes('high')) {
+  } else if (lower.includes('quan trong') || lower.includes('important') || lower.includes('high')) {
     tags.push('high');
-  } else if (lower.includes('low') || lower.includes('thấp')) {
+  } else if (lower.includes('low') || lower.includes('thap')) {
     tags.push('low');
   }
-  
-  // Other tags
-  if (lower.includes('study') || lower.includes('học') || lower.includes('ielts') || lower.includes('thi')) {
+
+  if (lower.includes('study') || lower.includes('hoc') || lower.includes('ielts') || lower.includes('thi')) {
     tags.push('study');
   }
-  if (lower.includes('work') || lower.includes('công việc')) {
+  if (lower.includes('work') || lower.includes('cong viec')) {
     tags.push('work');
   }
-  if (lower.includes('personal') || lower.includes('cá nhân')) {
+  if (lower.includes('personal') || lower.includes('ca nhan')) {
     tags.push('personal');
   }
-  if (lower.includes('lái xe') || lower.includes('xe')) {
+  if (lower.includes('lai xe') || lower.includes('xe')) {
     tags.push('transport');
   }
-  
+
   return tags.length > 0 ? tags : ['quick-add'];
 }
+
+
+function hasDateCue(input: string) {
+  const lower = normalizeText(input);
+  if (/(\bthu\s*[2-7]\b|\bt[2-7]\b|\bcn\b|chu\s*nhat)/i.test(lower)) return true;
+  if (/(\bhom\s*nay\b|\bngay\s*mai\b|\bmai\b|\btuan\s*nay\b|\btuan\s*sau\b)/i.test(lower)) return true;
+  if (/(\d{1,2})\/(\d{1,2})(?:\/(\d{4}))?/.test(lower)) return true;
+  return false;
+}
+
+function shouldTreatAsFinance(input: string, aiResult: any) {
+  const lower = normalizeText(input);
+  const hasDayOfWeek = /\b(thu\s*[2-7]|t[2-7]|cn|chu\s*nhat)\b/i.test(lower);
+  const hasCurrency = /\b\d+[,.]?\d*\s*(k|vnd|d|\$)\b/i.test(lower);
+  const hasMoneyVerb = /\b(chi|mua|tra|uong|an|cafe|luong|nhan)\b/i.test(lower);
+  const explicitFinance = hasCurrency || hasMoneyVerb;
+
+  if (hasDayOfWeek && !explicitFinance) return false;
+  if (!aiResult?.amount && !explicitFinance) return false;
+
+  return true;
+}
+
 
 // Initialize Groq client lazily (optional, only if API key is provided)
 async function getGroqClient(): Promise<any> {
@@ -217,8 +243,11 @@ async function getGroqClient(): Promise<any> {
         // Try to get from database (Settings model)
         const prismaClient = prisma as any;
         if (prismaClient.settings) {
+          const { getUserIdOrDev } = await import('@/lib/auth');
+          const userId = await getUserIdOrDev();
+          if (!userId) return null;
           const settings = await prismaClient.settings.findUnique({
-            where: { id: 'settings' }
+            where: { userId }
           });
           if (settings?.groqApiKey) {
             apiKey = settings.groqApiKey;
@@ -251,7 +280,11 @@ async function parseWithAI(input: string): Promise<any | null> {
         {
           role: 'system',
           content: `Parse Vietnamese input to JSON:
+Rules:
+- If input mentions day-of-week like "thu 7" without money/currency keywords, do NOT return TRANSACTION.
 {"type":"TASK|EVENT|TRANSACTION","title":"clean title","date":"ISO-8601","amount":number,"category":"string","tags":["string"],"isEvent":boolean}
+Rules:
+- If input mentions day-of-week like "thu 7" without money/currency keywords, do NOT return TRANSACTION.
 Examples:
 "thi lái xe sáng thứ 7"→{"type":"TASK","title":"thi lái xe","date":"...","tags":["study","transport"],"isEvent":false}
 "chi 45k ăn sáng mai"→{"type":"TRANSACTION","title":"ăn sáng","amount":45000,"date":"...","category":"Food","isEvent":false}`
@@ -279,10 +312,18 @@ export async function quickAddParser(input: string) {
   const aiResult = await parseWithAI(input);
   
   if (aiResult && aiResult.type) {
-    // Use AI result
-    const isFinance = aiResult.type === 'TRANSACTION';
     const isEvent = aiResult.isEvent || false;
+    const aiDate =
+      typeof aiResult.date === 'string' && !Number.isNaN(Date.parse(aiResult.date))
+        ? aiResult.date
+        : formatISO(new Date());
+    const finalDate = hasDateCue(input) ? formatISO(detectDate(input, isEvent)) : aiDate;
+
+    // Use AI result
+    const isFinance = aiResult.type === 'TRANSACTION' && shouldTreatAsFinance(input, aiResult);
     
+    const formattedAmount = Math.round(Math.abs(aiResult.amount || 0) / 1000);
+
     const transactions = isFinance
       ? [
           {
@@ -291,7 +332,7 @@ export async function quickAddParser(input: string) {
             currency: 'VND',
             category: aiResult.category || 'General',
             note: aiResult.description || input,
-            dateAt: aiResult.date || formatISO(new Date())
+            dateAt: finalDate
           }
         ]
       : [];
@@ -300,11 +341,11 @@ export async function quickAddParser(input: string) {
       ? [
           {
             type: 'FINANCE_REMINDER',
-            title: `${aiResult.amount > 0 ? 'Chi' : 'Thu'} ${new Intl.NumberFormat('vi-VN').format(Math.abs(aiResult.amount || 0))} VND - ${aiResult.category || 'General'}`,
+            title: `${formattedAmount}k`,
             description: aiResult.description || input,
-            startAt: aiResult.date || formatISO(new Date()),
+            startAt: finalDate,
             endAt: null,
-            dueAt: aiResult.date || formatISO(new Date()),
+            dueAt: finalDate,
             tags: (aiResult.tags || []).join(',')
           }
         ]
@@ -313,11 +354,11 @@ export async function quickAddParser(input: string) {
             type: isEvent ? 'EVENT' : 'TASK',
             title: aiResult.title || extractCleanTitle(input),
             description: aiResult.description || 'Tạo từ Quick Add',
-            startAt: aiResult.date || formatISO(new Date()),
+            startAt: finalDate,
             endAt: null,
             // For events, don't set dueAt (no deadline)
             // For tasks, set dueAt (has deadline)
-            dueAt: isEvent ? null : (aiResult.date || formatISO(new Date())),
+            dueAt: isEvent ? null : finalDate,
             tags: (aiResult.tags || []).join(','),
             status: 'TODO'
           }
@@ -346,6 +387,8 @@ export async function quickAddParser(input: string) {
   // Detect date with isEvent flag
   const date = detectDate(input, isEvent);
   
+  const formattedAmount = Math.round((amount || 0) / 1000);
+
   const transactions = isFinance
       ? [
           {
@@ -364,7 +407,7 @@ export async function quickAddParser(input: string) {
         // Create finance reminder for transactions
         {
           type: 'FINANCE_REMINDER',
-          title: `${type === 'EXPENSE' ? 'Chi' : 'Thu'} ${new Intl.NumberFormat('vi-VN').format(amount)} VND - ${category}`,
+          title: `${formattedAmount}k`,
           description: input,
           startAt: formatISO(date),
           endAt: null,
