@@ -86,24 +86,32 @@ export default function SettingsPage() {
       return;
     }
 
+    // Validate format first
+    if (!apiKeyInput.trim().startsWith('gsk_')) {
+      setSaveMessage('❌ API key không đúng format! Groq API key phải bắt đầu bằng "gsk_"');
+      return;
+    }
+
     setSaving(true);
     setSaveMessage('Đang kiểm tra API key...');
     
     try {
-      // Test by calling a simple Groq API
-      const testRes = await fetch('/api/plan', {
+      // Test with dedicated API endpoint
+      const testRes = await fetch('/api/test-api-key', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ input: 'test' })
+        body: JSON.stringify({ apiKey: apiKeyInput.trim() })
       });
       
-      if (testRes.ok) {
-        setSaveMessage('API key hợp lệ! ✅');
+      const result = await testRes.json();
+      
+      if (testRes.ok && result.valid) {
+        setSaveMessage('✅ API key hợp lệ và hoạt động tốt!');
       } else {
-        setSaveMessage('API key không hợp lệ hoặc có lỗi. ⚠️');
+        setSaveMessage(`❌ ${result.error || 'API key không hợp lệ hoặc có lỗi'}`);
       }
-    } catch (error) {
-      setSaveMessage('Không thể kiểm tra API key. Vui lòng thử lại.');
+    } catch (error: any) {
+      setSaveMessage(`❌ Không thể kiểm tra API key: ${error.message || 'Vui lòng thử lại'}`);
     } finally {
       setSaving(false);
       setTimeout(() => setSaveMessage(null), 5000);
