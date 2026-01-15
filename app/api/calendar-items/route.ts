@@ -42,14 +42,43 @@ const calendarItemSchema = z.object({
   linkTransactionId: z.string().nullable().optional()
 });
 
-export async function GET() {
+export async function GET(request: Request) {
   const userId = await getUserIdOrDev();
   if (!userId) {
     return NextResponse.json('Unauthorized', { status: 401 });
   }
 
+  const { searchParams } = new URL(request.url);
+  const startDateParam = searchParams.get('startDate');
+  const endDateParam = searchParams.get('endDate');
+
+  // Default to current month if no params provided
+  const now = new Date();
+  const startDate = startDateParam 
+    ? new Date(startDateParam) 
+    : new Date(now.getFullYear(), now.getMonth(), 1);
+  const endDate = endDateParam 
+    ? new Date(endDateParam) 
+    : new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999);
+
   const items = await prisma.calendarItem.findMany({
-    where: { userId },
+    where: {
+      userId,
+      OR: [
+        {
+          startAt: {
+            gte: startDate,
+            lte: endDate
+          }
+        },
+        {
+          dueAt: {
+            gte: startDate,
+            lte: endDate
+          }
+        }
+      ]
+    },
     orderBy: { startAt: 'asc' }
   });
   return NextResponse.json(items);

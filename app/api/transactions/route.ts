@@ -15,14 +15,33 @@ const transactionSchema = z.object({
   recurringRule: z.string().optional()
 });
 
-export async function GET() {
+export async function GET(request: Request) {
   const userId = await getUserIdOrDev();
   if (!userId) {
     return NextResponse.json('Unauthorized', { status: 401 });
   }
 
+  const { searchParams } = new URL(request.url);
+  const startDateParam = searchParams.get('startDate');
+  const endDateParam = searchParams.get('endDate');
+
+  // Default to current month if no params provided
+  const now = new Date();
+  const startDate = startDateParam 
+    ? new Date(startDateParam) 
+    : new Date(now.getFullYear(), now.getMonth(), 1);
+  const endDate = endDateParam 
+    ? new Date(endDateParam) 
+    : new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999);
+
   const transactions = await prisma.transaction.findMany({
-    where: { userId },
+    where: {
+      userId,
+      dateAt: {
+        gte: startDate,
+        lte: endDate
+      }
+    },
     include: { category: true },
     orderBy: { dateAt: 'desc' }
   });

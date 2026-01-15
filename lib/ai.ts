@@ -1,4 +1,17 @@
-import { addDays, formatISO, parse, startOfWeek, nextSaturday, nextSunday, setHours, setMinutes } from 'date-fns';
+import {
+  addDays,
+  addMonths,
+  addWeeks,
+  endOfMonth,
+  formatISO,
+  parse,
+  startOfMonth,
+  startOfWeek,
+  nextSaturday,
+  nextSunday,
+  setHours,
+  setMinutes
+} from 'date-fns';
 
 // Lazy import Groq to avoid errors if package is not installed
 let Groq: any = null;
@@ -59,16 +72,36 @@ function detectAmount(text: string) {
   return Number(raw);
 }
 
+function inferTransactionType(input: string, aiResult: any) {
+  const lower = normalizeText(input);
+  if (incomeKeywords.some((key) => lower.includes(key))) return 'INCOME';
+  if (expenseKeywords.some((key) => lower.includes(key))) return 'EXPENSE';
+  if (typeof aiResult?.amount === 'number' && aiResult.amount < 0) return 'INCOME';
+  return 'EXPENSE';
+}
+
 function detectDate(text: string, isEvent: boolean = false) {
   const lower = normalizeText(text);
   let date = new Date();
+  const today = new Date();
 
   if (lower.includes('hom nay')) {
-    date = new Date();
+    date = today;
   } else if (lower.includes('mai') || lower.includes('ngay mai')) {
-    date = addDays(new Date(), 1);
+    date = addDays(today, 1);
+  } else if (lower.includes('cuoi thang sau')) {
+    date = endOfMonth(addMonths(today, 1));
+  } else if (lower.includes('cuoi thang nay') || lower.includes('cuoi thang hien tai')) {
+    date = endOfMonth(today);
+  } else if (lower.includes('dau thang sau')) {
+    date = startOfMonth(addMonths(today, 1));
+  } else if (lower.includes('dau thang nay') || lower.includes('dau thang hien tai')) {
+    date = startOfMonth(today);
+  } else if (lower.includes('cuoi tuan sau')) {
+    date = addDays(startOfWeek(addWeeks(today, 1), { weekStartsOn: 1 }), 5);
+  } else if (lower.includes('cuoi tuan nay')) {
+    date = addDays(startOfWeek(today, { weekStartsOn: 1 }), 5);
   } else {
-    const today = new Date();
     const currentDay = today.getDay();
 
     const dayMap: Record<string, number> = {
@@ -99,13 +132,14 @@ function detectDate(text: string, isEvent: boolean = false) {
 
     for (const [key, targetDay] of Object.entries(dayMap)) {
       if (lower.includes(key)) {
-        const daysUntilTarget = (targetDay - currentDay + 7) % 7;
-        if (daysUntilTarget === 0 && !lower.includes('tuan nay')) {
-          date = addDays(today, 7);
-        } else if (isNextWeek) {
-          date = addDays(today, 7 + daysUntilTarget);
+        if (isThisWeek || isNextWeek) {
+          const baseWeek = isNextWeek ? addWeeks(today, 1) : today;
+          const weekStart = startOfWeek(baseWeek, { weekStartsOn: 1 });
+          const dayOffset = targetDay === 0 ? 6 : targetDay - 1;
+          date = addDays(weekStart, dayOffset);
         } else {
-          date = addDays(today, daysUntilTarget);
+          const daysUntilTarget = (targetDay - currentDay + 7) % 7;
+          date = daysUntilTarget === 0 ? addDays(today, 7) : addDays(today, daysUntilTarget);
         }
         break;
       }
@@ -279,15 +313,21 @@ async function parseWithAI(input: string): Promise<any | null> {
       messages: [
         {
           role: 'system',
-          content: `Parse Vietnamese input to JSON:
-Rules:
-- If input mentions day-of-week like "thu 7" without money/currency keywords, do NOT return TRANSACTION.
-{"type":"TASK|EVENT|TRANSACTION","title":"clean title","date":"ISO-8601","amount":number,"category":"string","tags":["string"],"isEvent":boolean}
-Rules:
-- If input mentions day-of-week like "thu 7" without money/currency keywords, do NOT return TRANSACTION.
+          content: `You are a strict JSON parser for Vietnamese quick-add input.
+Return ONLY valid JSON (no markdown, no extra text).
+
+Output schema:
+{"type":"TASK|EVENT|TRANSACTION","title":"string","date":"ISO-8601","amount":number,"category":"string","tags":["string"],"isEvent":boolean}
+
+Classification rules:
+- If input contains a monetary amount AND a spending verb (chi, mua, trả, thanh toán, ăn, uống), classify as TRANSACTION (expense).
+- If input contains a monetary amount AND an income verb (thu, nhận, lương), classify as TRANSACTION (income).
+- If input has day-of-week/time but no money cues, classify as TASK or EVENT.
+- If input is a reminder without money, classify as TASK/EVENT (not TRANSACTION).
+
 Examples:
-"thi lái xe sáng thứ 7"→{"type":"TASK","title":"thi lái xe","date":"...","tags":["study","transport"],"isEvent":false}
-"chi 45k ăn sáng mai"→{"type":"TRANSACTION","title":"ăn sáng","amount":45000,"date":"...","category":"Food","isEvent":false}`
+"thi lái xe sáng thứ 7" -> {"type":"TASK","title":"thi lái xe","date":"...","tags":["study","transport"],"isEvent":false}
+"chi 45k ăn sáng mai" -> {"type":"TRANSACTION","title":"ăn sáng","amount":45000,"date":"...","category":"Food","isEvent":false}`
         },
         {
           role: 'user',
@@ -299,8 +339,14 @@ Examples:
       response_format: { type: 'json_object' }
     });
 
-    const result = JSON.parse(completion.choices[0].message.content || '{}');
-    return result;
+    const rawContent = completion.choices[0].message.content || '{}';
+    try {
+      const result = JSON.parse(rawContent);
+      return result;
+    } catch (parseError) {
+      console.error('AI JSON parse error:', parseError);
+      return { __parseError: true };
+    }
   } catch (error) {
     console.error('AI parsing error:', error);
     return null;
@@ -311,7 +357,7 @@ export async function quickAddParser(input: string) {
   // Try AI parsing first (if available)
   const aiResult = await parseWithAI(input);
   
-  if (aiResult && aiResult.type) {
+  if (aiResult && aiResult.type && !aiResult.__parseError) {
     const isEvent = aiResult.isEvent || false;
     const aiDate =
       typeof aiResult.date === 'string' && !Number.isNaN(Date.parse(aiResult.date))
@@ -322,13 +368,15 @@ export async function quickAddParser(input: string) {
     // Use AI result
     const isFinance = aiResult.type === 'TRANSACTION' && shouldTreatAsFinance(input, aiResult);
     
-    const formattedAmount = Math.round(Math.abs(aiResult.amount || 0) / 1000);
+    const inferredType = inferTransactionType(input, aiResult);
+    const normalizedAmount = Math.abs(aiResult.amount || 0);
+    const formattedAmount = Math.round(normalizedAmount / 1000);
 
     const transactions = isFinance
       ? [
           {
-            type: aiResult.amount > 0 ? 'EXPENSE' : 'INCOME',
-            amount: Math.abs(aiResult.amount || 0),
+            type: inferredType,
+            amount: normalizedAmount,
             currency: 'VND',
             category: aiResult.category || 'General',
             note: aiResult.description || input,

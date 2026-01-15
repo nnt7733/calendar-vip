@@ -1,61 +1,32 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useMemo } from 'react';
 import { format, addDays } from 'date-fns';
 import Link from 'next/link';
+import { useCalendarData } from '@/hooks/useCalendarData';
+import { useBudgets } from '@/hooks/useBudgets';
 
-interface CalendarItem {
+interface BudgetWithSpending {
   id: string;
-  type: string;
-  title: string;
-  dueAt: string | null;
-  status: string;
-}
-
-interface Transaction {
-  id: string;
-  type: string;
-  amount: number;
-  dateAt: string;
+  categoryId: string | null;
+  categoryName: string;
+  limitAmount: number;
+  alertPercent: number;
+  spent: number;
+  percentUsed: number;
 }
 
 export default function DashboardPage() {
-  const [items, setItems] = useState<CalendarItem[]>([]);
-  const [transactions, setTransactions] = useState<Transaction[]>([]);
-  const [loading, setLoading] = useState(true);
+  // Fetch data for current month (default behavior)
+  const { items, transactions, loading: dataLoading } = useCalendarData();
+  const { budgets, loading: budgetsLoading } = useBudgets();
 
-  useEffect(() => {
-    fetchData();
-    
-    // Listen for refresh event
-    const handleRefresh = () => {
-      fetchData();
-    };
-    window.addEventListener('refresh-data', handleRefresh);
-    
-    return () => {
-      window.removeEventListener('refresh-data', handleRefresh);
-    };
-  }, []);
-
-  const fetchData = async () => {
-    try {
-      const [itemsRes, transactionsRes] = await Promise.all([
-        fetch('/api/calendar-items'),
-        fetch('/api/transactions')
-      ]);
-      const itemsData = await itemsRes.json();
-      const transactionsData = await transactionsRes.json();
-      setItems(Array.isArray(itemsData) ? itemsData : []);
-      setTransactions(Array.isArray(transactionsData) ? transactionsData : []);
-    } catch (error) {
-      console.error('Failed to fetch data:', error);
-    } finally {
-      setLoading(false);
-    }
-  };
+  const loading = dataLoading || budgetsLoading;
 
   const formatCurrency = (amount: number) => {
+    if (amount >= 1000000) {
+      return `${(amount / 1000000).toFixed(1)}M`;
+    }
     if (amount >= 1000) {
       return `${Math.round(amount / 1000)}k`;
     }
@@ -92,12 +63,45 @@ export default function DashboardPage() {
   const allIncome = transactions.filter((t) => t.type === 'INCOME').reduce((sum, t) => sum + t.amount, 0);
   const allExpense = transactions.filter((t) => t.type === 'EXPENSE').reduce((sum, t) => sum + t.amount, 0);
 
-  // Calculate budget usage (simplified - would need actual budget data)
-  const foodExpense = transactions
-    .filter((t) => t.type === 'EXPENSE')
-    .reduce((sum, t) => sum + t.amount, 0); // Simplified - should filter by category
-  const foodBudget = 1500000;
-  const foodUsed = Math.min((foodExpense / foodBudget) * 100, 100);
+  // Calculate spending per category and match with budgets
+  const budgetsWithSpending: BudgetWithSpending[] = useMemo(() => {
+    return budgets.map((budget) => {
+      let spent = 0;
+      
+      if (budget.categoryId) {
+        // Budget for specific category
+        spent = transactions
+          .filter((t) => t.type === 'EXPENSE' && t.category && t.category.id === budget.categoryId)
+          .reduce((sum, t) => sum + t.amount, 0);
+      } else {
+        // Total budget (all expenses)
+        spent = transactions
+          .filter((t) => t.type === 'EXPENSE')
+          .reduce((sum, t) => sum + t.amount, 0);
+      }
+
+      const percentUsed = budget.limitAmount > 0 
+        ? Math.min((spent / budget.limitAmount) * 100, 100) 
+        : 0;
+
+      return {
+        id: budget.id,
+        categoryId: budget.categoryId,
+        categoryName: budget.category?.name ?? 'Total Budget',
+        limitAmount: budget.limitAmount,
+        alertPercent: budget.alertPercent,
+        spent,
+        percentUsed
+      };
+    });
+  }, [budgets, transactions]);
+
+  const getProgressBarColor = (percentUsed: number, alertPercent: number) => {
+    if (percentUsed >= 100) return 'bg-red-500';
+    if (percentUsed >= alertPercent) return 'bg-yellow-500';
+    if (percentUsed >= alertPercent * 0.8) return 'bg-orange-400';
+    return 'bg-accent';
+  };
 
   if (loading) {
     return (
@@ -108,8 +112,8 @@ export default function DashboardPage() {
   }
 
   return (
-    <div className="space-y-6">
-      <section className="grid gap-6 lg:grid-cols-3">
+    <div className="space-y-4 sm:space-y-6">
+      <section className="grid gap-4 sm:gap-6 grid-cols-1 md:grid-cols-2 lg:grid-cols-3">
         <div className="card">
           <h2 className="mb-3 text-lg font-semibold text-white">Upcoming Tasks</h2>
           {upcomingTasks.length === 0 ? (
@@ -165,28 +169,50 @@ export default function DashboardPage() {
         <div className="card">
           <h2 className="mb-3 text-lg font-semibold text-white">Budget Status</h2>
           <div className="space-y-4">
-            <div>
-              <div className="flex items-center justify-between text-sm mb-2">
-                <span className="text-slate-300">Food & Drink</span>
-                <span className="text-slate-400">{formatCurrency(foodBudget)}</span>
-              </div>
-              <div className="h-2 w-full rounded-full bg-slate-800">
-                <div
-                  className={`h-2 rounded-full ${
-                    foodUsed >= 80 ? 'bg-red-500' : foodUsed >= 50 ? 'bg-yellow-500' : 'bg-accent'
-                  }`}
-                  style={{ width: `${foodUsed}%` }}
-                />
-              </div>
-              <p className="text-xs text-slate-500 mt-1">
-                {foodUsed.toFixed(1)}% used ({formatCurrency(foodExpense)})
-              </p>
-            </div>
+            {budgetsWithSpending.length === 0 ? (
+              <p className="text-sm text-slate-400">No budgets set for this month</p>
+            ) : (
+              budgetsWithSpending.map((budget) => (
+                <div key={budget.id}>
+                  <div className="flex items-center justify-between text-sm mb-2">
+                    <span className="text-slate-300">{budget.categoryName}</span>
+                    <span className="text-slate-400">{formatCurrency(budget.limitAmount)}</span>
+                  </div>
+                  <div className="h-2 w-full rounded-full bg-slate-800">
+                    <div
+                      className={`h-2 rounded-full transition-all ${getProgressBarColor(
+                        budget.percentUsed,
+                        budget.alertPercent
+                      )}`}
+                      style={{ width: `${budget.percentUsed}%` }}
+                    />
+                  </div>
+                  <div className="flex items-center justify-between mt-1">
+                    <p className="text-xs text-slate-500">
+                      {budget.percentUsed.toFixed(1)}% used ({formatCurrency(budget.spent)})
+                    </p>
+                    {budget.percentUsed >= budget.alertPercent && (
+                      <span className={`text-xs font-medium ${
+                        budget.percentUsed >= 100 ? 'text-red-400' : 'text-yellow-400'
+                      }`}>
+                        {budget.percentUsed >= 100 ? 'Over budget!' : 'Alert'}
+                      </span>
+                    )}
+                  </div>
+                </div>
+              ))
+            )}
           </div>
+          <Link
+            href="/finance"
+            className="mt-4 block text-xs text-primary hover:underline"
+          >
+            Manage budgets →
+          </Link>
         </div>
       </section>
 
-      <section className="grid gap-6 lg:grid-cols-2">
+      <section className="grid gap-4 sm:gap-6 grid-cols-1 lg:grid-cols-2">
         <div className="card">
           <h2 className="mb-3 text-lg font-semibold text-white">Quick Actions</h2>
           <div className="grid gap-4 sm:grid-cols-2">

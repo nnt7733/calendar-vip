@@ -1,8 +1,10 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useState, useMemo, useCallback } from 'react';
 import {
   format,
+  formatISO,
+  parse,
   startOfMonth,
   endOfMonth,
   eachDayOfInterval,
@@ -17,31 +19,9 @@ import {
   isToday
 } from 'date-fns';
 import { ChevronLeft, ChevronRight, Plus, Star, DollarSign, CheckSquare } from 'lucide-react';
-
-interface CalendarItem {
-  id: string;
-  type: string;
-  title: string;
-  description: string;
-  startAt: string | null;
-  endAt: string | null;
-  dueAt: string | null;
-  status: string;
-  tags: string;
-}
-
-interface Transaction {
-  id: string;
-  type: string;
-  amount: number;
-  currency: string;
-  note: string;
-  dateAt: string;
-  category: {
-    id: string;
-    name: string;
-  };
-}
+import { DndContext, DragEndEvent, useDraggable, useDroppable } from '@dnd-kit/core';
+import { CSS } from '@dnd-kit/utilities';
+import { useCalendarData, CalendarItem, Transaction } from '@/hooks/useCalendarData';
 
 type ViewMode = 'all' | 'tasks' | 'finance';
 
@@ -94,50 +74,81 @@ const getDaysUntilDue = (dueAt: string | null): number | null => {
   return diff;
 };
 
+type DraggableCalendarItemProps = {
+  item: CalendarItem;
+  className: string;
+  title?: string;
+  children: React.ReactNode;
+};
+
+function DraggableCalendarItem({ item, className, title, children }: DraggableCalendarItemProps) {
+  const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
+    id: item.id
+  });
+
+  const style = transform ? { transform: CSS.Translate.toString(transform) } : undefined;
+
+  return (
+    <div
+      ref={setNodeRef}
+      style={{ ...style, opacity: isDragging ? 0.6 : 1 }}
+      className={`${className} ${isDragging ? 'ring-1 ring-primary/60' : ''} cursor-grab active:cursor-grabbing`}
+      title={title}
+      {...listeners}
+      {...attributes}
+    >
+      {children}
+    </div>
+  );
+}
+
+type DroppableDayCellProps = {
+  id: string;
+  className: string;
+  onClick: () => void;
+  children: React.ReactNode;
+};
+
+function DroppableDayCell({ id, className, onClick, children }: DroppableDayCellProps) {
+  const { setNodeRef, isOver } = useDroppable({
+    id
+  });
+
+  return (
+    <div
+      ref={setNodeRef}
+      onClick={onClick}
+      className={`${className} ${isOver ? 'ring-2 ring-primary/40' : ''}`}
+      data-day-id={id}
+    >
+      {children}
+    </div>
+  );
+}
+
 export default function CalendarPage() {
   const [currentDate, setCurrentDate] = useState(new Date());
-  const [items, setItems] = useState<CalendarItem[]>([]);
-  const [transactions, setTransactions] = useState<Transaction[]>([]);
-  const [loading, setLoading] = useState(true);
   const [selectedDate, setSelectedDate] = useState<Date | null>(null);
   const [viewMode, setViewMode] = useState<ViewMode>('all');
 
-  useEffect(() => {
-    fetchData();
-    
-    // Listen for refresh event
-    const handleRefresh = () => {
-      fetchData();
+  // Memoize date range calculations to prevent infinite re-renders
+  const { calendarStart, calendarEnd, days } = useMemo(() => {
+    const monthStart = startOfMonth(currentDate);
+    const monthEnd = endOfMonth(currentDate);
+    const start = startOfWeek(monthStart, { weekStartsOn: 1 });
+    const end = endOfWeek(monthEnd, { weekStartsOn: 1 });
+    return {
+      calendarStart: start,
+      calendarEnd: end,
+      days: eachDayOfInterval({ start, end })
     };
-    window.addEventListener('refresh-data', handleRefresh);
-    
-    return () => {
-      window.removeEventListener('refresh-data', handleRefresh);
-    };
-  }, []);
+  }, [currentDate]);
 
-  const fetchData = async () => {
-    try {
-      const [itemsRes, transactionsRes] = await Promise.all([
-        fetch('/api/calendar-items'),
-        fetch('/api/transactions')
-      ]);
-      const itemsData = await itemsRes.json();
-      const transactionsData = await transactionsRes.json();
-      setItems(Array.isArray(itemsData) ? itemsData : []);
-      setTransactions(Array.isArray(transactionsData) ? transactionsData : []);
-    } catch (error) {
-      console.error('Failed to fetch data:', error);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const monthStart = startOfMonth(currentDate);
-  const monthEnd = endOfMonth(currentDate);
-  const calendarStart = startOfWeek(monthStart, { weekStartsOn: 1 }); // Monday
-  const calendarEnd = endOfWeek(monthEnd, { weekStartsOn: 1 });
-  const days = eachDayOfInterval({ start: calendarStart, end: calendarEnd });
+  // Fetch data for the visible calendar range
+  const { items, transactions, loading, refreshData } = useCalendarData({
+    startDate: calendarStart,
+    endDate: calendarEnd
+  });
 
   const getItemsForDate = (date: Date) => {
     let filteredItems = items.filter((item) => {
@@ -180,64 +191,72 @@ export default function CalendarPage() {
     return `${amount}`;
   };
 
+  const mergeDateWithTime = (sourceIso: string | null, targetDate: Date) => {
+    if (!sourceIso) return null;
+    const source = new Date(sourceIso);
+    const merged = new Date(targetDate);
+    merged.setHours(source.getHours(), source.getMinutes(), source.getSeconds(), source.getMilliseconds());
+    return formatISO(merged);
+  };
+
+  const handleDragEnd = useCallback(
+    async (event: DragEndEvent) => {
+      const { active, over } = event;
+      if (!over) return;
+
+      const item = items.find((i) => i.id === active.id);
+      if (!item) return;
+
+      const targetDayId = String(over.id);
+      const targetDate = parse(targetDayId, 'yyyy-MM-dd', new Date());
+      if (Number.isNaN(targetDate.getTime())) return;
+
+      const currentDateSource = item.startAt ?? item.dueAt;
+      if (currentDateSource) {
+        const currentDayId = format(new Date(currentDateSource), 'yyyy-MM-dd');
+        if (currentDayId === targetDayId) return;
+      }
+
+      const payload: Record<string, any> = { id: item.id };
+      const hasStart = Boolean(item.startAt);
+      const hasDue = Boolean(item.dueAt);
+
+      if (hasStart) payload.startAt = mergeDateWithTime(item.startAt, targetDate);
+      if (hasDue) payload.dueAt = mergeDateWithTime(item.dueAt, targetDate);
+
+      if (!hasStart && !hasDue) {
+        const iso = formatISO(targetDate);
+        if (item.type === 'EVENT') {
+          payload.startAt = iso;
+        } else {
+          payload.dueAt = iso;
+        }
+      }
+
+      try {
+        await fetch('/api/calendar-items', {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        await refreshData();
+      } catch (error) {
+        console.error('Failed to update item date:', error);
+      }
+    },
+    [items, refreshData]
+  );
+
   return (
-    <div className="space-y-6">
-      <div className="flex flex-wrap items-center justify-between gap-4">
-        <div>
-          <h2 className="text-xl font-semibold text-white">Calendar Planner</h2>
-          <p className="text-sm text-slate-400">Month view with task + finance overlay.</p>
-        </div>
-        <div className="flex items-center gap-4">
-          {/* View Mode Toggle */}
-          <div className="flex gap-2 rounded-xl border border-slate-700 bg-slate-900/80 p-1">
-            <button
-              onClick={() => setViewMode('all')}
-              className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors ${
-                viewMode === 'all'
-                  ? 'bg-primary text-white'
-                  : 'text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              All
-            </button>
-            <button
-              onClick={() => setViewMode('tasks')}
-              className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors ${
-                viewMode === 'tasks'
-                  ? 'bg-primary text-white'
-                  : 'text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              <CheckSquare className="h-3 w-3" />
-              Tasks
-            </button>
-            <button
-              onClick={() => setViewMode('finance')}
-              className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors ${
-                viewMode === 'finance'
-                  ? 'bg-primary text-white'
-                  : 'text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              <DollarSign className="h-3 w-3" />
-              Finance
-            </button>
+    <div className="space-y-4 sm:space-y-6">
+      {/* Header - Mobile Optimized */}
+      <div className="space-y-4">
+        {/* Title and Add Button Row */}
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <h2 className="text-lg sm:text-xl font-semibold text-white">Calendar Planner</h2>
+            <p className="text-xs sm:text-sm text-slate-400 hidden sm:block">Month view with task + finance overlay.</p>
           </div>
-          <button
-            onClick={prevMonth}
-            className="rounded-full border border-slate-700 p-2 hover:bg-slate-800"
-          >
-            <ChevronLeft className="h-4 w-4 text-slate-300" />
-          </button>
-          <h3 className="text-lg font-semibold text-white min-w-[200px] text-center">
-            {format(currentDate, 'MMMM yyyy')}
-          </h3>
-          <button
-            onClick={nextMonth}
-            className="rounded-full border border-slate-700 p-2 hover:bg-slate-800"
-          >
-            <ChevronRight className="h-4 w-4 text-slate-300" />
-          </button>
           <button
             onClick={async () => {
               const title = prompt('Event title:');
@@ -258,123 +277,187 @@ export default function CalendarPage() {
                       tags: ['event']
                     })
                   });
-                  await fetchData();
+                  await refreshData();
                   alert('Event đã được tạo thành công!');
                 } catch (error) {
                   alert('Failed to create event');
                 }
               }
             }}
-            className="flex items-center gap-2 rounded-full bg-primary px-4 py-2 text-sm font-semibold text-white hover:bg-primary/90"
+            className="flex items-center gap-2 rounded-full bg-primary px-3 py-2 sm:px-4 text-xs sm:text-sm font-semibold text-white hover:bg-primary/90 shrink-0"
           >
             <Plus className="h-4 w-4" />
-            Add Event
+            <span className="hidden sm:inline">Add Event</span>
+            <span className="sm:hidden">Add</span>
           </button>
+        </div>
+
+        {/* Controls Row - Scrollable on mobile */}
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+          {/* View Mode Toggle */}
+          <div className="flex gap-1 sm:gap-2 rounded-xl border border-slate-700 bg-slate-900/80 p-1 overflow-x-auto">
+            <button
+              onClick={() => setViewMode('all')}
+              className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors whitespace-nowrap ${
+                viewMode === 'all'
+                  ? 'bg-primary text-white'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              All
+            </button>
+            <button
+              onClick={() => setViewMode('tasks')}
+              className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors whitespace-nowrap ${
+                viewMode === 'tasks'
+                  ? 'bg-primary text-white'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              <CheckSquare className="h-3 w-3" />
+              Tasks
+            </button>
+            <button
+              onClick={() => setViewMode('finance')}
+              className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors whitespace-nowrap ${
+                viewMode === 'finance'
+                  ? 'bg-primary text-white'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              <DollarSign className="h-3 w-3" />
+              Finance
+            </button>
+          </div>
+
+          {/* Month Navigation */}
+          <div className="flex items-center justify-center sm:justify-end gap-2 sm:gap-3">
+            <button
+              onClick={prevMonth}
+              className="rounded-full border border-slate-700 p-2 hover:bg-slate-800 active:bg-slate-700"
+            >
+              <ChevronLeft className="h-4 w-4 text-slate-300" />
+            </button>
+            <h3 className="text-base sm:text-lg font-semibold text-white min-w-[140px] sm:min-w-[180px] text-center">
+              {format(currentDate, 'MMM yyyy')}
+            </h3>
+            <button
+              onClick={nextMonth}
+              className="rounded-full border border-slate-700 p-2 hover:bg-slate-800 active:bg-slate-700"
+            >
+              <ChevronRight className="h-4 w-4 text-slate-300" />
+            </button>
+          </div>
         </div>
       </div>
 
-      <div className="card">
+      <div className="card p-2 sm:p-4">
         {loading ? (
           <div className="flex items-center justify-center py-12">
             <p className="text-slate-400">Loading calendar...</p>
           </div>
         ) : (
-          <div className="overflow-x-auto">
-            <div className="grid grid-cols-7 gap-px bg-slate-800 rounded-xl overflow-hidden min-w-[700px]">
-              {/* Week day headers */}
-              {weekDays.map((day) => (
-                <div key={day} className="bg-slate-900/80 p-2 text-center">
-                  <p className="text-xs font-semibold text-slate-400">{day}</p>
-                </div>
-              ))}
+          <div className="overflow-x-auto -mx-2 sm:mx-0 px-2 sm:px-0 pb-2">
+            <DndContext onDragEnd={handleDragEnd}>
+              <div className="grid grid-cols-7 gap-px bg-slate-800 rounded-xl overflow-hidden min-w-[600px] sm:min-w-[700px]">
+                {/* Week day headers */}
+                {weekDays.map((day) => (
+                  <div key={day} className="bg-slate-900/80 p-2 text-center">
+                    <p className="text-xs font-semibold text-slate-400">{day}</p>
+                  </div>
+                ))}
 
-              {/* Calendar days */}
-              {days.map((day, idx) => {
-                const dayItems = getItemsForDate(day);
-                const dayTransactions = getTransactionsForDate(day);
-                const isCurrentMonth = isSameMonth(day, currentDate);
-                const isTodayDate = isToday(day);
-                const isSelected = selectedDate && isSameDay(day, selectedDate);
+                {/* Calendar days */}
+                {days.map((day, idx) => {
+                  const dayItems = getItemsForDate(day);
+                  const dayTransactions = getTransactionsForDate(day);
+                  const isCurrentMonth = isSameMonth(day, currentDate);
+                  const isTodayDate = isToday(day);
+                  const isSelected = selectedDate && isSameDay(day, selectedDate);
+                  const dayId = format(day, 'yyyy-MM-dd');
 
-                return (
-                  <div
-                    key={idx}
-                    onClick={() => setSelectedDate(day)}
-                    className={`min-h-[120px] bg-slate-900/60 p-2 border border-slate-800 hover:bg-slate-800/80 transition-colors cursor-pointer ${
-                      !isCurrentMonth ? 'opacity-40' : ''
-                    } ${isTodayDate ? 'ring-2 ring-primary ring-offset-2 ring-offset-slate-900' : ''} ${
-                      isSelected ? 'bg-slate-800' : ''
-                    }`}
-                  >
-                    <div className="flex items-center justify-between mb-1">
-                      <span
-                        className={`text-sm font-medium ${
-                          isTodayDate
-                            ? 'bg-primary text-white rounded-full w-6 h-6 flex items-center justify-center'
-                            : isCurrentMonth
-                              ? 'text-slate-300'
-                              : 'text-slate-600'
-                        }`}
-                      >
-                        {format(day, 'd')}
-                      </span>
-                    </div>
-                    <div className="space-y-1 mt-1">
-                      {/* Calendar Items */}
-                      {dayItems.slice(0, 3).map((item) => {
-                        const priority = getItemPriority(item.tags);
-                        const daysUntilDue = getDaysUntilDue(item.dueAt);
-                        const isHighPriority = priority === 'high';
-                        return (
-                          <div
-                            key={item.id}
-                            className={`text-xs px-2 py-1 rounded border truncate flex items-center gap-1 ${getItemColor(
-                              item.type,
-                              item.status,
-                              daysUntilDue,
-                              priority
-                            )} ${isHighPriority ? 'font-semibold' : ''}`}
-                            title={item.title}
-                          >
-                            {isHighPriority && (
-                              <Star className="h-2.5 w-2.5 fill-yellow-400 text-yellow-400" />
-                            )}
-                            {item.type === 'FINANCE_REMINDER' && <DollarSign className="h-2.5 w-2.5" />}
-                            {item.title}
-                            {daysUntilDue !== null && daysUntilDue >= 0 && (
-                              <span className="ml-auto text-[10px] opacity-75">
-                                {daysUntilDue === 0 ? 'Today' : `${daysUntilDue}d`}
-                              </span>
-                            )}
-                          </div>
-                        );
-                      })}
-                      {/* Transactions (if finance view) */}
-                      {viewMode !== 'tasks' &&
-                        dayTransactions.slice(0, dayItems.length < 3 ? 3 - dayItems.length : 0).map((trans) => {
-                          const isExpense = trans.type === 'EXPENSE';
+                  return (
+                    <DroppableDayCell
+                      key={idx}
+                      id={dayId}
+                      onClick={() => setSelectedDate(day)}
+                      className={`min-h-[90px] sm:min-h-[120px] bg-slate-900/60 p-1.5 sm:p-2 border border-slate-800 hover:bg-slate-800/80 active:bg-slate-700/80 transition-colors cursor-pointer ${
+                        !isCurrentMonth ? 'opacity-40' : ''
+                      } ${isTodayDate ? 'ring-2 ring-primary ring-offset-1 sm:ring-offset-2 ring-offset-slate-900' : ''} ${
+                        isSelected ? 'bg-slate-800' : ''
+                      }`}
+                    >
+                      <div className="flex items-center justify-between mb-1">
+                        <span
+                          className={`text-sm font-medium ${
+                            isTodayDate
+                              ? 'bg-primary text-white rounded-full w-6 h-6 flex items-center justify-center'
+                              : isCurrentMonth
+                                ? 'text-slate-300'
+                                : 'text-slate-600'
+                          }`}
+                        >
+                          {format(day, 'd')}
+                        </span>
+                      </div>
+                      <div className="space-y-1 mt-1">
+                        {/* Calendar Items */}
+                        {dayItems.slice(0, 3).map((item) => {
+                          const priority = getItemPriority(item.tags);
+                          const daysUntilDue = getDaysUntilDue(item.dueAt);
+                          const isHighPriority = priority === 'high';
                           return (
-                            <div
-                              key={trans.id}
-                              className="text-xs px-2 py-1 rounded border truncate flex items-center gap-1 bg-slate-800/60 border-slate-700 text-slate-300"
-                              title={trans.note}
+                            <DraggableCalendarItem
+                              key={item.id}
+                              item={item}
+                              className={`text-xs px-2 py-1 rounded border truncate flex items-center gap-1 ${getItemColor(
+                                item.type,
+                                item.status,
+                                daysUntilDue,
+                                priority
+                              )} ${isHighPriority ? 'font-semibold' : ''}`}
+                              title={item.title}
                             >
-                              <DollarSign className="h-2.5 w-2.5" />
-                              {isExpense ? '-' : '+'}
-                              {formatCurrency(trans.amount)}
-                            </div>
+                              {isHighPriority && (
+                                <Star className="h-2.5 w-2.5 fill-yellow-400 text-yellow-400" />
+                              )}
+                              {item.type === 'FINANCE_REMINDER' && <DollarSign className="h-2.5 w-2.5" />}
+                              {item.title}
+                              {daysUntilDue !== null && daysUntilDue >= 0 && (
+                                <span className="ml-auto text-[10px] opacity-75">
+                                  {daysUntilDue === 0 ? 'Today' : `${daysUntilDue}d`}
+                                </span>
+                              )}
+                            </DraggableCalendarItem>
                           );
                         })}
-                      {(dayItems.length + (viewMode !== 'tasks' ? dayTransactions.length : 0)) > 3 && (
-                        <div className="text-xs text-slate-500 px-2">
-                          +{dayItems.length + (viewMode !== 'tasks' ? dayTransactions.length : 0) - 3} more
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
+                        {/* Transactions (if finance view) */}
+                        {viewMode !== 'tasks' &&
+                          dayTransactions.slice(0, dayItems.length < 3 ? 3 - dayItems.length : 0).map((trans) => {
+                            const isExpense = trans.type === 'EXPENSE';
+                            return (
+                              <div
+                                key={trans.id}
+                                className="text-xs px-2 py-1 rounded border truncate flex items-center gap-1 bg-slate-800/60 border-slate-700 text-slate-300"
+                                title={trans.note}
+                              >
+                                <DollarSign className="h-2.5 w-2.5" />
+                                {isExpense ? '-' : '+'}
+                                {formatCurrency(trans.amount)}
+                              </div>
+                            );
+                          })}
+                        {(dayItems.length + (viewMode !== 'tasks' ? dayTransactions.length : 0)) > 3 && (
+                          <div className="text-xs text-slate-500 px-2">
+                            +{dayItems.length + (viewMode !== 'tasks' ? dayTransactions.length : 0) - 3} more
+                          </div>
+                        )}
+                      </div>
+                    </DroppableDayCell>
+                  );
+                })}
+              </div>
+            </DndContext>
           </div>
         )}
       </div>
@@ -432,7 +515,7 @@ export default function CalendarPage() {
                                         status: newStatus
                                       })
                                     });
-                                    await fetchData();
+                                    await refreshData();
                                   } catch (error) {
                                     console.error('Failed to update status:', error);
                                   }
@@ -502,7 +585,7 @@ export default function CalendarPage() {
                           <span className="text-xs font-semibold uppercase">{trans.type}</span>
                         </div>
                         <h4 className="font-semibold text-white mb-1">{trans.note}</h4>
-                        <p className="text-sm text-slate-300">{trans.category.name}</p>
+                        <p className="text-sm text-slate-300">{trans.category?.name ?? 'Uncategorized'}</p>
                       </div>
                       <div className="text-right">
                         <p className="text-lg font-bold text-white">
@@ -523,7 +606,7 @@ export default function CalendarPage() {
       )}
 
       {/* Summary stats */}
-      <section className="grid gap-6 lg:grid-cols-3">
+      <section className="grid gap-4 sm:gap-6 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3">
         <div className="card">
           <h3 className="mb-2 text-lg font-semibold text-white">This Month</h3>
           <div className="space-y-2 text-sm">
