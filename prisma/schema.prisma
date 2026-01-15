@@ -66,6 +66,9 @@ model CalendarItem {
   status            String      @default("TODO") // TODO | DONE
   tags              String
   linkTransactionId String?
+  priority          Int         @default(3) // 1 (Thấp) -> 5 (Rất cao/Khẩn cấp)
+  isRecurring       Boolean     @default(false)
+  recurringRule     String?     // Ví dụ: "DAILY", "WEEKLY", "MONDAY"
   transaction       Transaction? @relation(fields: [linkTransactionId], references: [id])
 
   @@index([userId])
@@ -87,10 +90,11 @@ model Settings {
 
 model SmartKeyword {
   id             String   @id @default(cuid())
-  keyword        String   @unique
+  keyword        String
   mappedType     String   // TRANSACTION | TASK | EVENT
   mappedCategory String?
   userId         String
 
   @@index([userId])
+  @@unique([keyword, userId])
 }

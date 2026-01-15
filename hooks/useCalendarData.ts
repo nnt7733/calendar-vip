@@ -13,6 +13,9 @@ export interface CalendarItem {
   dueAt: string | null;
   status: string;
   tags: string;
+  priority?: number;
+  isRecurring?: boolean;
+  recurringRule?: string | null;
 }
 
 export interface Transaction {

@@ -21,18 +21,8 @@ export async function POST(request: Request) {
     const keyword = parsed.keyword;
     const mappedCategory = parsed.category && parsed.category.length > 0 ? parsed.category : null;
 
-    const existing = await prisma.smartKeyword.findUnique({
-      where: { keyword }
-    });
-    if (existing && existing.userId !== userId) {
-      return NextResponse.json(
-        { message: 'Keyword already belongs to another user.' },
-        { status: 409 }
-      );
-    }
-
     const record = await prisma.smartKeyword.upsert({
-      where: { keyword },
+      where: { keyword_userId: { keyword, userId } },
       update: {
         mappedType: parsed.type,
         mappedCategory

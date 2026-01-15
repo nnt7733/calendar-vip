@@ -249,6 +249,10 @@ function hasDateCue(input: string) {
   return false;
 }
 
+function isValidDateString(value: unknown): value is string {
+  return typeof value === 'string' && !Number.isNaN(Date.parse(value));
+}
+
 function shouldTreatAsFinance(input: string, aiResult: any) {
   const lower = normalizeText(input);
   const hasDayOfWeek = /\b(thu\s*[2-7]|t[2-7]|cn|chu\s*nhat)\b/i.test(lower);
@@ -262,6 +266,11 @@ function shouldTreatAsFinance(input: string, aiResult: any) {
   return true;
 }
 
+function clampPriority(value: unknown, fallback: number = 3) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.min(5, Math.max(1, Math.round(parsed)));
+}
 
 // Initialize Groq client lazily (optional, only if API key is provided)
 async function getGroqClient(): Promise<any> {
@@ -304,6 +313,43 @@ async function getGroqClient(): Promise<any> {
   }
 }
 
+const getSystemPrompt = () => `
+You are a smart bulk parser for a Vietnamese personal planner app.
+Analyze the user input (which may contain multiple lines/items) and return a JSON object containing an array of items.
+
+RULES:
+1. Detect Intent: Separate distinct tasks/events/finance items based on newlines or context.
+2. Priority (1-5): 
+   - Keywords: "gấp", "quan trọng", "chết", "ngay" -> 5
+   - Keywords: "bình thường", "làm cũng được" -> 3
+   - Keywords: "rảnh thì làm", "khi nào cũng được" -> 1
+   - Default -> 3
+3. Recurring: Detect "mỗi ngày", "hàng tuần", "thứ 2 hàng tuần". Set "recurringRule" to "DAILY", "WEEKLY", etc.
+4. Dates: Calculate exact ISO dates relative to today (Current: ${new Date().toISOString()}).
+   - If a task implies a span (e.g., "Finish project by 20/1"), set "startDate" = today and "endDate" = 20/1.
+   - If it's a specific event time, set "startDate".
+
+OUTPUT SCHEMA (Strict JSON):
+{
+  "items": [
+    {
+      "type": "TASK" | "EVENT" | "TRANSACTION",
+      "title": "Clean string title",
+      "description": "Details if any",
+      "priority": 1-5,
+      "amount": number (for transactions),
+      "category": "string",
+      "startDate": "ISO String",
+      "endDate": "ISO String (optional)",
+      "isRecurring": boolean,
+      "recurringRule": "string (optional)"
+    }
+  ]
+}
+
+Ensure NO markdown, NO explanations, ONLY raw JSON.
+`;
+
 async function parseWithAI(input: string): Promise<any | null> {
   const groqClient = await getGroqClient();
   if (!groqClient) return null;
@@ -311,38 +357,11 @@ async function parseWithAI(input: string): Promise<any | null> {
   try {
     const completion = await groqClient.chat.completions.create({
       messages: [
-        {
-          role: 'system',
-          content: `You are a strict JSON parser for Vietnamese quick-add input.
-Return ONLY valid JSON (no markdown, no extra text).
-
-Output schema:
-{"type":"TASK|EVENT|TRANSACTION","title":"string","date":"ISO-8601","amount":number,"category":"string","tags":["string"],"isEvent":boolean}
-
-Classification rules:
-- If input contains a monetary amount AND a spending verb (chi, mua, trả, thanh toán, ăn, uống), classify as TRANSACTION with type "TRANSACTION".
-- If input contains a monetary amount AND an income verb (thu, nhận, lương), classify as TRANSACTION with type "TRANSACTION".
-- If input has day-of-week/time but no money cues, classify as TASK or EVENT.
-- If input is a reminder without money, classify as TASK/EVENT (not TRANSACTION).
-
-IMPORTANT - Amount rules:
-- Always return positive numbers for the "amount" field (never negative).
-- The transaction type (income vs expense) is determined by the verb in the input, NOT by the amount sign.
-- For expenses: return positive amount (e.g., "chi 45k" -> amount: 45000)
-- For income: return positive amount (e.g., "thu 2tr" -> amount: 2000000)
-
-Examples:
-"thi lái xe sáng thứ 7" -> {"type":"TASK","title":"thi lái xe","date":"...","tags":["study","transport"],"isEvent":false}
-"chi 45k ăn sáng mai" -> {"type":"TRANSACTION","title":"ăn sáng","amount":45000,"date":"...","category":"Food","isEvent":false}
-"thu 2tr lương" -> {"type":"TRANSACTION","title":"lương","amount":2000000,"date":"...","category":"Salary","isEvent":false}`
-        },
-        {
-          role: 'user',
-          content: input
-        }
+        { role: 'system', content: getSystemPrompt() },
+        { role: 'user', content: input }
       ],
       model: 'llama-3.1-8b-instant', // Free and fast model
-      temperature: 0.3,
+      temperature: 0.2, // Giảm nhiệt độ để kết quả chính xác hơn
       response_format: { type: 'json_object' }
     });
 
@@ -406,6 +425,9 @@ export async function quickAddParser(input: string, userId?: string) {
     const date = detectDate(input, isEvent);
     const formattedAmount = Math.round((amount || 0) / 1000);
     const category = smartRule.mappedCategory || detectCategory(input);
+    const priority = clampPriority(undefined);
+    const isRecurring = false;
+    const recurringRule = null;
 
     const isFinance = smartRule.mappedType === 'TRANSACTION';
     const transactionType = detectType(input) || 'EXPENSE';
@@ -432,7 +454,10 @@ export async function quickAddParser(input: string, userId?: string) {
             startAt: formatISO(date),
             endAt: null,
             dueAt: formatISO(date),
-            tags: tags.join(',')
+            tags: tags.join(','),
+            priority,
+            isRecurring,
+            recurringRule
           }
         ]
       : [
@@ -444,7 +469,10 @@ export async function quickAddParser(input: string, userId?: string) {
             endAt: null,
             dueAt: isEvent ? null : formatISO(date),
             tags: Array.isArray(tags) ? tags.join(',') : tags,
-            status: 'TODO'
+            status: 'TODO',
+            priority,
+            isRecurring,
+            recurringRule
           }
         ];
 
@@ -460,9 +488,89 @@ export async function quickAddParser(input: string, userId?: string) {
 
   // Try AI parsing first (if available)
   const aiResult = await parseWithAI(input);
-  
+  if (aiResult && !aiResult.__parseError) {
+    if (Array.isArray(aiResult.items) && aiResult.items.length > 0) {
+      const calendarItems: any[] = [];
+      const transactions: any[] = [];
+
+      aiResult.items.forEach((item: any) => {
+        if (!item || typeof item !== 'object') return;
+        const rawType = String(item.type || '').toUpperCase();
+        if (!['TASK', 'EVENT', 'TRANSACTION'].includes(rawType)) return;
+
+        const title = item.title || extractCleanTitle(input);
+        const description = item.description || 'Tạo từ Quick Add';
+        const startAt = isValidDateString(item.startDate)
+          ? item.startDate
+          : formatISO(detectDate(title || input, rawType === 'EVENT'));
+        const endAt = isValidDateString(item.endDate) ? item.endDate : null;
+        const priority = clampPriority(item.priority);
+        const isRecurring = Boolean(item.isRecurring);
+        const recurringRule = item.recurringRule || null;
+
+        if (rawType === 'TRANSACTION') {
+          const normalizedAmount = Math.abs(Number(item.amount || 0));
+          const formattedAmount = Math.round(normalizedAmount / 1000);
+          const inferredType = inferTransactionType(input, item);
+
+          transactions.push({
+            type: inferredType,
+            amount: normalizedAmount,
+            currency: 'VND',
+            category: item.category || 'General',
+            note: item.description || title || input,
+            dateAt: startAt,
+            isRecurring,
+            recurringRule
+          });
+
+          calendarItems.push({
+            type: 'FINANCE_REMINDER',
+            title: `${formattedAmount}k`,
+            description: item.description || title || input,
+            startAt,
+            endAt: null,
+            dueAt: startAt,
+            tags: detectTags(title || input).join(','),
+            priority,
+            isRecurring,
+            recurringRule
+          });
+        } else {
+          calendarItems.push({
+            type: rawType,
+            title,
+            description,
+            startAt,
+            endAt: rawType === 'EVENT' ? endAt : null,
+            dueAt: rawType === 'EVENT' ? null : endAt || startAt,
+            tags: detectTags(title || input).join(','),
+            status: 'TODO',
+            priority,
+            isRecurring,
+            recurringRule
+          });
+        }
+      });
+
+      if (calendarItems.length > 0 || transactions.length > 0) {
+        return {
+          clarifyingQuestion: null,
+          assumptions: ['Đã sử dụng AI Bulk Add để parse.'],
+          create: {
+            calendarItems,
+            transactions
+          }
+        };
+      }
+    }
+  }
+
   if (aiResult && aiResult.type && !aiResult.__parseError) {
     const isEvent = aiResult.isEvent || false;
+    const priority = clampPriority(aiResult.priority);
+    const isRecurring = Boolean(aiResult.isRecurring);
+    const recurringRule = aiResult.recurringRule || null;
     const aiDate =
       typeof aiResult.date === 'string' && !Number.isNaN(Date.parse(aiResult.date))
         ? aiResult.date
@@ -484,7 +592,9 @@ export async function quickAddParser(input: string, userId?: string) {
             currency: 'VND',
             category: aiResult.category || 'General',
             note: aiResult.description || input,
-            dateAt: finalDate
+            dateAt: finalDate,
+            isRecurring,
+            recurringRule
           }
         ]
       : [];
@@ -498,7 +608,10 @@ export async function quickAddParser(input: string, userId?: string) {
             startAt: finalDate,
             endAt: null,
             dueAt: finalDate,
-            tags: (aiResult.tags || []).join(',')
+            tags: (aiResult.tags || []).join(','),
+            priority,
+            isRecurring,
+            recurringRule
           }
         ]
       : [
@@ -512,7 +625,10 @@ export async function quickAddParser(input: string, userId?: string) {
             // For tasks, set dueAt (has deadline)
             dueAt: isEvent ? null : finalDate,
             tags: (aiResult.tags || []).join(','),
-            status: 'TODO'
+            status: 'TODO',
+            priority,
+            isRecurring,
+            recurringRule
           }
         ];
 
@@ -531,6 +647,9 @@ export async function quickAddParser(input: string, userId?: string) {
   const amount = detectAmount(input);
   const category = detectCategory(input);
   const tags = detectTags(input);
+  const priority = clampPriority(undefined);
+  const isRecurring = false;
+  const recurringRule = null;
 
   // Determine if it's a finance transaction or task/event
   const isFinance = type && amount;
@@ -564,7 +683,10 @@ export async function quickAddParser(input: string, userId?: string) {
           startAt: formatISO(date),
           endAt: null,
           dueAt: formatISO(date),
-          tags: tags.join(',')
+          tags: tags.join(','),
+          priority,
+          isRecurring,
+          recurringRule
         }
       ]
     : [
@@ -578,7 +700,10 @@ export async function quickAddParser(input: string, userId?: string) {
           // For tasks, set dueAt (has deadline)
           dueAt: isEvent ? null : formatISO(date),
           tags: Array.isArray(tags) ? tags.join(',') : tags,
-          status: 'TODO'
+          status: 'TODO',
+          priority,
+          isRecurring,
+          recurringRule
         }
       ];
 

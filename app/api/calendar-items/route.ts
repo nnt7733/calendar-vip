@@ -30,7 +30,8 @@ const dateTimeSchema = z.preprocess((value) => {
   return trimmed;
 }, z.string().datetime({ offset: true }).nullable().optional());
 
-const calendarItemSchema = z.object({
+const calendarItemSchema = z
+  .object({
   type: z.enum(['TASK', 'NOTE', 'EVENT', 'FINANCE_REMINDER']),
   title: z.string(),
   description: z.string().default(''),
@@ -39,8 +40,20 @@ const calendarItemSchema = z.object({
   dueAt: dateTimeSchema,
   status: z.enum(['TODO', 'DONE']).optional(),
   tags: tagsSchema.optional(),
-  linkTransactionId: z.string().nullable().optional()
-});
+  linkTransactionId: z.string().nullable().optional(),
+  priority: z.number().int().min(1).max(5).optional(),
+  isRecurring: z.boolean().optional(),
+  recurringRule: z.string().optional()
+  })
+  .superRefine((data, ctx) => {
+    if (data.isRecurring && !data.recurringRule?.trim()) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['recurringRule'],
+        message: 'recurringRule is required when isRecurring is true'
+      });
+    }
+  });
 
 export async function GET(request: Request) {
   const userId = await getUserIdOrDev();
@@ -76,6 +89,24 @@ export async function GET(request: Request) {
             gte: startDate,
             lte: endDate
           }
+        },
+        {
+          endAt: {
+            gte: startDate,
+            lte: endDate
+          }
+        },
+        {
+          AND: [
+            { startAt: { lte: endDate } },
+            { dueAt: { gte: startDate } }
+          ]
+        },
+        {
+          AND: [
+            { startAt: { lte: endDate } },
+            { endAt: { gte: startDate } }
+          ]
         }
       ]
     },
@@ -103,6 +134,9 @@ export async function POST(request: Request) {
         dueAt: parsed.dueAt ? new Date(parsed.dueAt) : null,
         tags: parsed.tags?.join(',') ?? '',
         status: parsed.status || 'TODO',
+        priority: parsed.priority ?? 3,
+        isRecurring: parsed.isRecurring ?? false,
+        recurringRule: parsed.recurringRule ?? null,
         userId,
         transaction: linkTransactionId ? { connect: { id: linkTransactionId } } : undefined
       }
@@ -158,6 +192,15 @@ export async function PATCH(request: Request) {
   }
   if (updateData.tags) {
     updatePayload.tags = Array.isArray(updateData.tags) ? updateData.tags.join(',') : updateData.tags;
+  }
+  if (updateData.priority !== undefined) {
+    updatePayload.priority = updateData.priority;
+  }
+  if (updateData.isRecurring !== undefined) {
+    updatePayload.isRecurring = updateData.isRecurring;
+  }
+  if (updateData.recurringRule !== undefined) {
+    updatePayload.recurringRule = updateData.recurringRule;
   }
 
   const updateResult = await prisma.calendarItem.updateMany({

@@ -3,17 +3,27 @@ import { z } from 'zod';
 import { prisma } from '@/lib/db';
 import { getUserIdOrDev } from '@/lib/auth';
 
-const transactionSchema = z.object({
-  type: z.enum(['INCOME', 'EXPENSE']),
-  amount: z.number(),
-  currency: z.string().default('VND'),
-  categoryId: z.string(),
-  note: z.string().default(''),
-  dateAt: z.string().datetime(),
-  paymentMethod: z.enum(['CASH', 'BANK', 'EWALLET']).optional(),
-  isRecurring: z.boolean().optional(),
-  recurringRule: z.string().optional()
-});
+const transactionSchema = z
+  .object({
+    type: z.enum(['INCOME', 'EXPENSE']),
+    amount: z.number(),
+    currency: z.string().default('VND'),
+    categoryId: z.string(),
+    note: z.string().default(''),
+    dateAt: z.string().datetime(),
+    paymentMethod: z.enum(['CASH', 'BANK', 'EWALLET']).optional(),
+    isRecurring: z.boolean().optional(),
+    recurringRule: z.string().optional()
+  })
+  .superRefine((data, ctx) => {
+    if (data.isRecurring && !data.recurringRule?.trim()) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['recurringRule'],
+        message: 'recurringRule is required when isRecurring is true'
+      });
+    }
+  });
 
 export async function GET(request: Request) {
   const userId = await getUserIdOrDev();

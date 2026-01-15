@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useMemo, useCallback } from 'react';
+import { useState, useMemo, useCallback, memo } from 'react';
 import {
   format,
   formatISO,
@@ -72,6 +72,16 @@ const getDaysUntilDue = (dueAt: string | null): number | null => {
   due.setHours(0, 0, 0, 0);
   const diff = differenceInDays(due, today);
   return diff;
+};
+
+// Priority color helper for calendar items
+const getPriorityColor = (priority: number) => {
+  if (priority >= 5) {
+    return 'bg-red-600 text-white border-red-400 shadow-[0_0_10px_rgba(220,38,38,0.5)]';
+  }
+  if (priority === 4) return 'bg-orange-500/40 text-orange-100 border-orange-500';
+  if (priority === 3) return 'bg-blue-500/30 text-blue-100 border-blue-500/50';
+  return 'bg-slate-700/50 text-slate-400 border-slate-600';
 };
 
 const toDayStart = (date: Date) => {
@@ -155,6 +165,145 @@ function DroppableDayCell({ id, className, onClick, children }: DroppableDayCell
   );
 }
 
+type DayCellProps = {
+  day: Date;
+  dayId: string;
+  items: CalendarItem[];
+  transactions: Transaction[];
+  isCurrentMonth: boolean;
+  isTodayDate: boolean;
+  isSelected: boolean | null;
+  onSelect: (day: Date) => void;
+  viewMode: ViewMode;
+};
+
+const DayCell = memo(
+  ({
+    day,
+    dayId,
+    items,
+    transactions,
+    isCurrentMonth,
+    isTodayDate,
+    isSelected,
+    onSelect,
+    viewMode
+  }: DayCellProps) => {
+    return (
+      <DroppableDayCell
+        id={dayId}
+        onClick={() => onSelect(day)}
+        className={`min-h-[90px] sm:min-h-[120px] bg-black/70 p-1.5 sm:p-2 border border-slate-900 hover:bg-black/60 active:bg-black/50 transition-colors cursor-pointer ${
+          !isCurrentMonth ? 'opacity-40' : ''
+        } ${isTodayDate ? 'ring-2 ring-primary ring-offset-1 sm:ring-offset-2 ring-offset-slate-900' : ''} ${
+          isSelected ? 'bg-slate-800' : ''
+        }`}
+      >
+        <div className="flex items-center justify-between mb-1">
+          <span
+            className={`text-sm font-medium ${
+              isTodayDate
+                ? 'bg-primary text-white rounded-full w-6 h-6 flex items-center justify-center'
+                : isCurrentMonth
+                  ? 'text-slate-300'
+                  : 'text-slate-600'
+            }`}
+          >
+            {format(day, 'd')}
+          </span>
+        </div>
+        <div className="space-y-1 mt-1">
+          {/* Calendar Items */}
+          {items.slice(0, 3).map((item) => {
+            const priority = getItemPriority(item.tags);
+            const daysUntilDue = getDaysUntilDue(item.dueAt);
+            const isHighPriority = priority === 'high';
+            const spanStatus = getSpanStatusForDate(item, day);
+            const isSpanMiddle = spanStatus === 'middle';
+            const isTimeline =
+              Boolean(item.startAt && item.dueAt) &&
+              !isSameDay(new Date(item.startAt), new Date(item.dueAt));
+            const priorityValue = item.priority ?? 3;
+            const priorityGlow =
+              priorityValue >= 5
+                ? 'shadow-[0_0_12px_rgba(239,68,68,0.55)]'
+                : priorityValue === 4
+                  ? 'shadow-[0_0_10px_rgba(249,115,22,0.45)]'
+                  : '';
+            const timelineGlow = isTimeline ? 'shadow-[0_0_12px_rgba(59,130,246,0.35)]' : '';
+            const displayTitle =
+              spanStatus === 'start'
+                ? `Start: ${item.title}`
+                : spanStatus === 'end'
+                  ? `Due: ${item.title}`
+                  : spanStatus === 'middle'
+                    ? `${item.title} (cont.)`
+                    : item.title;
+            return (
+              <DraggableCalendarItem
+                key={item.id}
+                item={item}
+                className={`text-xs px-2 ${isSpanMiddle ? 'py-0.5 opacity-70' : 'py-1'} rounded border truncate flex items-center gap-1 ${isTimeline ? 'mx-[-4px] z-10' : 'mx-0'} ${priorityGlow} ${timelineGlow} ${getItemColor(
+                  item.type,
+                  item.status,
+                  daysUntilDue,
+                  priority
+                )} ${getPriorityColor(priorityValue)} ${isHighPriority ? 'font-semibold' : ''}`}
+                title={item.title}
+              >
+                <span className="text-[10px] font-bold mr-1">[{priorityValue}]</span>
+                {isHighPriority && (
+                  <Star className="h-2.5 w-2.5 fill-yellow-400 text-yellow-400" />
+                )}
+                {spanStatus === 'start' && <Play className="h-2.5 w-2.5" />}
+                {spanStatus === 'end' && <Flag className="h-2.5 w-2.5" />}
+                {item.type === 'FINANCE_REMINDER' && <DollarSign className="h-2.5 w-2.5" />}
+                {displayTitle}
+                {daysUntilDue !== null && daysUntilDue >= 0 && (
+                  <span className="ml-auto text-[10px] opacity-75">
+                    {daysUntilDue === 0 ? 'Today' : `${daysUntilDue}d`}
+                  </span>
+                )}
+              </DraggableCalendarItem>
+            );
+          })}
+          {/* Transactions (if finance view) */}
+          {viewMode !== 'tasks' &&
+            transactions.slice(0, items.length < 3 ? 3 - items.length : 0).map((trans) => {
+              const isExpense = trans.type === 'EXPENSE';
+              return (
+                <div
+                  key={trans.id}
+                  className="text-xs px-2 py-1 rounded border truncate flex items-center gap-1 bg-slate-800/60 border-slate-700 text-slate-300"
+                  title={trans.note}
+                >
+                  <DollarSign className="h-2.5 w-2.5" />
+                  {isExpense ? '-' : '+'}
+                  {formatCurrency(trans.amount)}
+                </div>
+              );
+            })}
+          {(items.length + (viewMode !== 'tasks' ? transactions.length : 0)) > 3 && (
+            <div className="text-xs text-slate-500 px-2">
+              +{items.length + (viewMode !== 'tasks' ? transactions.length : 0) - 3} more
+            </div>
+          )}
+        </div>
+      </DroppableDayCell>
+    );
+  },
+  (prev, next) => {
+    return (
+      prev.items === next.items &&
+      prev.transactions === next.transactions &&
+      prev.isSelected === next.isSelected &&
+      prev.viewMode === next.viewMode &&
+      prev.isTodayDate === next.isTodayDate &&
+      prev.isCurrentMonth === next.isCurrentMonth
+    );
+  }
+);
+
 export default function CalendarPage() {
   const [currentDate, setCurrentDate] = useState(new Date());
   const [selectedDate, setSelectedDate] = useState<Date | null>(null);
@@ -179,28 +328,43 @@ export default function CalendarPage() {
     endDate: calendarEnd
   });
 
-  const getItemsForDate = (date: Date) => {
-    let filteredItems = items.filter((item) => {
-      if (viewMode === 'finance') {
-        return item.type === 'FINANCE_REMINDER';
-      }
-      if (viewMode === 'tasks') {
-        return item.type !== 'FINANCE_REMINDER';
-      }
-      return true;
+  const { itemsByDate, transactionsByDate } = useMemo(() => {
+    const itemMap: Record<string, CalendarItem[]> = {};
+    const transMap: Record<string, Transaction[]> = {};
+
+    days.forEach((day) => {
+      const key = format(day, 'yyyy-MM-dd');
+      itemMap[key] = [];
+      transMap[key] = [];
     });
 
-    return filteredItems.filter((item) => {
-      return Boolean(getSpanStatusForDate(item, date));
-    });
-  };
+    items.forEach((item) => {
+      if (viewMode === 'finance' && item.type !== 'FINANCE_REMINDER') return;
+      if (viewMode === 'tasks' && item.type === 'FINANCE_REMINDER') return;
 
-  const getTransactionsForDate = (date: Date) => {
-    if (viewMode === 'tasks') return [];
-    return transactions.filter((trans) => {
-      return isSameDay(new Date(trans.dateAt), date);
+      const range = getItemDateRange(item);
+      if (!range) return;
+
+      const datesInRange = eachDayOfInterval({ start: range.start, end: range.end });
+      datesInRange.forEach((date) => {
+        const key = format(date, 'yyyy-MM-dd');
+        if (itemMap[key]) {
+          itemMap[key].push(item);
+        }
+      });
     });
-  };
+
+    if (viewMode !== 'tasks') {
+      transactions.forEach((trans) => {
+        const key = format(new Date(trans.dateAt), 'yyyy-MM-dd');
+        if (transMap[key]) {
+          transMap[key].push(trans);
+        }
+      });
+    }
+
+    return { itemsByDate: itemMap, transactionsByDate: transMap };
+  }, [items, transactions, days, viewMode]);
 
   const nextMonth = () => setCurrentDate(addMonths(currentDate, 1));
   const prevMonth = () => setCurrentDate(subMonths(currentDate, 1));
@@ -394,110 +558,33 @@ export default function CalendarPage() {
               <div className="grid grid-cols-7 gap-px bg-slate-800 rounded-xl overflow-hidden min-w-[600px] sm:min-w-[700px]">
                 {/* Week day headers */}
                 {weekDays.map((day) => (
-                  <div key={day} className="bg-slate-900/80 p-2 text-center">
+                  <div key={day} className="bg-black/80 p-2 text-center border-b border-slate-900">
                     <p className="text-xs font-semibold text-slate-400">{day}</p>
                   </div>
                 ))}
 
                 {/* Calendar days */}
                 {days.map((day, idx) => {
-                  const dayItems = getItemsForDate(day);
-                  const dayTransactions = getTransactionsForDate(day);
+                  const dayId = format(day, 'yyyy-MM-dd');
+                  const dayItems = itemsByDate[dayId] || [];
+                  const dayTransactions = transactionsByDate[dayId] || [];
                   const isCurrentMonth = isSameMonth(day, currentDate);
                   const isTodayDate = isToday(day);
                   const isSelected = selectedDate && isSameDay(day, selectedDate);
-                  const dayId = format(day, 'yyyy-MM-dd');
 
                   return (
-                    <DroppableDayCell
-                      key={idx}
-                      id={dayId}
-                      onClick={() => setSelectedDate(day)}
-                      className={`min-h-[90px] sm:min-h-[120px] bg-slate-900/60 p-1.5 sm:p-2 border border-slate-800 hover:bg-slate-800/80 active:bg-slate-700/80 transition-colors cursor-pointer ${
-                        !isCurrentMonth ? 'opacity-40' : ''
-                      } ${isTodayDate ? 'ring-2 ring-primary ring-offset-1 sm:ring-offset-2 ring-offset-slate-900' : ''} ${
-                        isSelected ? 'bg-slate-800' : ''
-                      }`}
-                    >
-                      <div className="flex items-center justify-between mb-1">
-                        <span
-                          className={`text-sm font-medium ${
-                            isTodayDate
-                              ? 'bg-primary text-white rounded-full w-6 h-6 flex items-center justify-center'
-                              : isCurrentMonth
-                                ? 'text-slate-300'
-                                : 'text-slate-600'
-                          }`}
-                        >
-                          {format(day, 'd')}
-                        </span>
-                      </div>
-                      <div className="space-y-1 mt-1">
-                        {/* Calendar Items */}
-                        {dayItems.slice(0, 3).map((item) => {
-                          const priority = getItemPriority(item.tags);
-                          const daysUntilDue = getDaysUntilDue(item.dueAt);
-                          const isHighPriority = priority === 'high';
-                          const spanStatus = getSpanStatusForDate(item, day);
-                          const isSpanMiddle = spanStatus === 'middle';
-                          const displayTitle =
-                            spanStatus === 'start'
-                              ? `Start: ${item.title}`
-                              : spanStatus === 'end'
-                                ? `Due: ${item.title}`
-                                : spanStatus === 'middle'
-                                  ? `${item.title} (cont.)`
-                                  : item.title;
-                          return (
-                            <DraggableCalendarItem
-                              key={item.id}
-                              item={item}
-                              className={`text-xs px-2 ${isSpanMiddle ? 'py-0.5 opacity-70' : 'py-1'} rounded border truncate flex items-center gap-1 ${getItemColor(
-                                item.type,
-                                item.status,
-                                daysUntilDue,
-                                priority
-                              )} ${isHighPriority ? 'font-semibold' : ''}`}
-                              title={item.title}
-                            >
-                              {isHighPriority && (
-                                <Star className="h-2.5 w-2.5 fill-yellow-400 text-yellow-400" />
-                              )}
-                              {spanStatus === 'start' && <Play className="h-2.5 w-2.5" />}
-                              {spanStatus === 'end' && <Flag className="h-2.5 w-2.5" />}
-                              {item.type === 'FINANCE_REMINDER' && <DollarSign className="h-2.5 w-2.5" />}
-                              {displayTitle}
-                              {daysUntilDue !== null && daysUntilDue >= 0 && (
-                                <span className="ml-auto text-[10px] opacity-75">
-                                  {daysUntilDue === 0 ? 'Today' : `${daysUntilDue}d`}
-                                </span>
-                              )}
-                            </DraggableCalendarItem>
-                          );
-                        })}
-                        {/* Transactions (if finance view) */}
-                        {viewMode !== 'tasks' &&
-                          dayTransactions.slice(0, dayItems.length < 3 ? 3 - dayItems.length : 0).map((trans) => {
-                            const isExpense = trans.type === 'EXPENSE';
-                            return (
-                              <div
-                                key={trans.id}
-                                className="text-xs px-2 py-1 rounded border truncate flex items-center gap-1 bg-slate-800/60 border-slate-700 text-slate-300"
-                                title={trans.note}
-                              >
-                                <DollarSign className="h-2.5 w-2.5" />
-                                {isExpense ? '-' : '+'}
-                                {formatCurrency(trans.amount)}
-                              </div>
-                            );
-                          })}
-                        {(dayItems.length + (viewMode !== 'tasks' ? dayTransactions.length : 0)) > 3 && (
-                          <div className="text-xs text-slate-500 px-2">
-                            +{dayItems.length + (viewMode !== 'tasks' ? dayTransactions.length : 0) - 3} more
-                          </div>
-                        )}
-                      </div>
-                    </DroppableDayCell>
+                    <DayCell
+                      key={dayId}
+                      day={day}
+                      dayId={dayId}
+                      items={dayItems}
+                      transactions={dayTransactions}
+                      isCurrentMonth={isCurrentMonth}
+                      isTodayDate={isTodayDate}
+                      isSelected={isSelected}
+                      onSelect={setSelectedDate}
+                      viewMode={viewMode}
+                    />
                   );
                 })}
               </div>
@@ -521,130 +608,144 @@ export default function CalendarPage() {
             </button>
           </div>
           <div className="space-y-3">
-            {/* Calendar Items */}
-            {getItemsForDate(selectedDate).length === 0 &&
-            getTransactionsForDate(selectedDate).length === 0 ? (
-              <p className="text-sm text-slate-400">No items for this date</p>
-            ) : (
-              <>
-                {getItemsForDate(selectedDate).map((item) => {
-                  const priority = getItemPriority(item.tags);
-                  const daysUntilDue = getDaysUntilDue(item.dueAt);
-                  const isHighPriority = priority === 'high';
-                  return (
+            {(() => {
+              const selectedKey = format(selectedDate, 'yyyy-MM-dd');
+              const selectedItems = itemsByDate[selectedKey] || [];
+              const selectedTransactions = transactionsByDate[selectedKey] || [];
+
+              if (selectedItems.length === 0 && selectedTransactions.length === 0) {
+                return <p className="text-sm text-slate-400">No items for this date</p>;
+              }
+
+              return (
+                <>
+                  {selectedItems.map((item) => {
+                    const priority = getItemPriority(item.tags);
+                    const daysUntilDue = getDaysUntilDue(item.dueAt);
+                    const isHighPriority = priority === 'high';
+                    return (
+                      <div
+                        key={item.id}
+                        className={`rounded-xl border p-4 ${getItemColor(
+                          item.type,
+                          item.status,
+                          daysUntilDue,
+                          priority
+                        )}`}
+                      >
+                        <div className="flex items-start justify-between">
+                          <div className="flex-1">
+                            <div className="flex items-center gap-2 mb-1">
+                              {item.type !== 'FINANCE_REMINDER' && (
+                                <input
+                                  type="checkbox"
+                                  checked={item.status === 'DONE'}
+                                  onChange={async () => {
+                                    const newStatus = item.status === 'DONE' ? 'TODO' : 'DONE';
+                                    try {
+                                      await fetch('/api/calendar-items', {
+                                        method: 'PATCH',
+                                        headers: { 'Content-Type': 'application/json' },
+                                        body: JSON.stringify({
+                                          id: item.id,
+                                          status: newStatus
+                                        })
+                                      });
+                                      await refreshData();
+                                    } catch (error) {
+                                      console.error('Failed to update status:', error);
+                                    }
+                                  }}
+                                  className="h-4 w-4 rounded border-slate-600 bg-slate-800 text-primary focus:ring-primary"
+                                />
+                              )}
+                              {isHighPriority && (
+                                <Star className="h-4 w-4 fill-yellow-400 text-yellow-400" />
+                              )}
+                            <span className="text-xs font-semibold uppercase">{item.type}</span>
+                            <span className="text-xs bg-slate-800/50 text-slate-200 px-2 py-0.5 rounded">
+                              Priority {item.priority ?? 3}
+                            </span>
+                            {item.isRecurring && (
+                              <span className="text-xs bg-indigo-500/20 text-indigo-200 px-2 py-0.5 rounded">
+                                Repeat{item.recurringRule ? `: ${item.recurringRule}` : ''}
+                              </span>
+                            )}
+                              {item.status === 'DONE' && (
+                                <span className="text-xs bg-green-500/20 text-green-300 px-2 py-0.5 rounded">
+                                  Done
+                                </span>
+                              )}
+                              {daysUntilDue !== null && daysUntilDue >= 0 && (
+                                <span className="text-xs bg-red-500/20 text-red-300 px-2 py-0.5 rounded">
+                                  {daysUntilDue === 0
+                                    ? 'Due Today'
+                                    : daysUntilDue === 1
+                                      ? 'Due Tomorrow'
+                                      : `${daysUntilDue} days left`}
+                                </span>
+                              )}
+                            </div>
+                            <h4 className="font-semibold text-white mb-1">{item.title}</h4>
+                            {item.description && (
+                              <p className="text-sm text-slate-300 mb-2">{item.description}</p>
+                            )}
+                            {item.tags && (
+                              <div className="flex flex-wrap gap-1 mt-2">
+                                {item.tags
+                                  .split(',')
+                                  .filter((t) => t.trim())
+                                  .map((tag, idx) => (
+                                    <span
+                                      key={idx}
+                                      className="text-xs bg-slate-800/50 text-slate-300 px-2 py-0.5 rounded"
+                                    >
+                                      {tag.trim()}
+                                    </span>
+                                  ))}
+                              </div>
+                            )}
+                          </div>
+                          <div className="text-xs text-slate-400 ml-4">
+                            {item.startAt && (
+                              <div>Start: {format(new Date(item.startAt), 'HH:mm')}</div>
+                            )}
+                            {item.dueAt && <div>Due: {format(new Date(item.dueAt), 'HH:mm')}</div>}
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                  {/* Transactions */}
+                  {selectedTransactions.map((trans) => (
                     <div
-                      key={item.id}
-                      className={`rounded-xl border p-4 ${getItemColor(
-                        item.type,
-                        item.status,
-                        daysUntilDue,
-                        priority
-                      )}`}
+                      key={trans.id}
+                      className="rounded-xl border p-4 bg-green-500/20 border-green-500/50 text-green-300"
                     >
                       <div className="flex items-start justify-between">
                         <div className="flex-1">
                           <div className="flex items-center gap-2 mb-1">
-                            {item.type !== 'FINANCE_REMINDER' && (
-                              <input
-                                type="checkbox"
-                                checked={item.status === 'DONE'}
-                                onChange={async () => {
-                                  const newStatus = item.status === 'DONE' ? 'TODO' : 'DONE';
-                                  try {
-                                    await fetch('/api/calendar-items', {
-                                      method: 'PATCH',
-                                      headers: { 'Content-Type': 'application/json' },
-                                      body: JSON.stringify({
-                                        id: item.id,
-                                        status: newStatus
-                                      })
-                                    });
-                                    await refreshData();
-                                  } catch (error) {
-                                    console.error('Failed to update status:', error);
-                                  }
-                                }}
-                                className="h-4 w-4 rounded border-slate-600 bg-slate-800 text-primary focus:ring-primary"
-                              />
-                            )}
-                            {isHighPriority && (
-                              <Star className="h-4 w-4 fill-yellow-400 text-yellow-400" />
-                            )}
-                            <span className="text-xs font-semibold uppercase">{item.type}</span>
-                            {item.status === 'DONE' && (
-                              <span className="text-xs bg-green-500/20 text-green-300 px-2 py-0.5 rounded">
-                                Done
-                              </span>
-                            )}
-                            {daysUntilDue !== null && daysUntilDue >= 0 && (
-                              <span className="text-xs bg-red-500/20 text-red-300 px-2 py-0.5 rounded">
-                                {daysUntilDue === 0
-                                  ? 'Due Today'
-                                  : daysUntilDue === 1
-                                    ? 'Due Tomorrow'
-                                    : `${daysUntilDue} days left`}
-                              </span>
-                            )}
+                            <DollarSign className="h-4 w-4" />
+                            <span className="text-xs font-semibold uppercase">{trans.type}</span>
                           </div>
-                          <h4 className="font-semibold text-white mb-1">{item.title}</h4>
-                          {item.description && (
-                            <p className="text-sm text-slate-300 mb-2">{item.description}</p>
-                          )}
-                          {item.tags && (
-                            <div className="flex flex-wrap gap-1 mt-2">
-                              {item.tags
-                                .split(',')
-                                .filter((t) => t.trim())
-                                .map((tag, idx) => (
-                                  <span
-                                    key={idx}
-                                    className="text-xs bg-slate-800/50 text-slate-300 px-2 py-0.5 rounded"
-                                  >
-                                    {tag.trim()}
-                                  </span>
-                                ))}
-                            </div>
-                          )}
+                          <h4 className="font-semibold text-white mb-1">{trans.note}</h4>
+                          <p className="text-sm text-slate-300">{trans.category?.name ?? 'Uncategorized'}</p>
                         </div>
-                        <div className="text-xs text-slate-400 ml-4">
-                          {item.startAt && (
-                            <div>Start: {format(new Date(item.startAt), 'HH:mm')}</div>
-                          )}
-                          {item.dueAt && <div>Due: {format(new Date(item.dueAt), 'HH:mm')}</div>}
+                        <div className="text-right">
+                          <p className="text-lg font-bold text-white">
+                            {trans.type === 'EXPENSE' ? '-' : '+'}
+                            {formatCurrency(trans.amount)}
+                          </p>
+                          <p className="text-xs text-slate-400 mt-1">
+                            {format(new Date(trans.dateAt), 'HH:mm')}
+                          </p>
                         </div>
                       </div>
                     </div>
-                  );
-                })}
-                {/* Transactions */}
-                {getTransactionsForDate(selectedDate).map((trans) => (
-                  <div
-                    key={trans.id}
-                    className="rounded-xl border p-4 bg-green-500/20 border-green-500/50 text-green-300"
-                  >
-                    <div className="flex items-start justify-between">
-                      <div className="flex-1">
-                        <div className="flex items-center gap-2 mb-1">
-                          <DollarSign className="h-4 w-4" />
-                          <span className="text-xs font-semibold uppercase">{trans.type}</span>
-                        </div>
-                        <h4 className="font-semibold text-white mb-1">{trans.note}</h4>
-                        <p className="text-sm text-slate-300">{trans.category?.name ?? 'Uncategorized'}</p>
-                      </div>
-                      <div className="text-right">
-                        <p className="text-lg font-bold text-white">
-                          {trans.type === 'EXPENSE' ? '-' : '+'}
-                          {formatCurrency(trans.amount)}
-                        </p>
-                        <p className="text-xs text-slate-400 mt-1">
-                          {format(new Date(trans.dateAt), 'HH:mm')}
-                        </p>
-                      </div>
-                    </div>
-                  </div>
-                ))}
-              </>
-            )}
+                  ))}
+                </>
+              );
+            })()}
           </div>
         </div>
       )}
