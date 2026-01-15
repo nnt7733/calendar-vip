@@ -45,21 +45,22 @@ export function useCalendarData(options: UseCalendarDataOptions = {}): UseCalend
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [loading, setLoading] = useState(true);
 
-  // Get current month key to use as dependency when no dates provided
-  // This ensures the memo recomputes when the month changes
-  const currentMonthKey = new Date().toISOString().slice(0, 7);
-
   // Memoize ISO strings to prevent infinite re-renders
   // Default to current month if no dates provided
+  // Use stable dependency: if startDate is provided, use its timestamp; otherwise use current month key
   const startDateISO = useMemo(() => {
     const date = options.startDate ?? startOfMonth(new Date());
     return date.toISOString();
-  }, [options.startDate?.getTime(), currentMonthKey]);
+  }, [
+    options.startDate ? options.startDate.getTime() : new Date().toISOString().slice(0, 7)
+  ]);
 
   const endDateISO = useMemo(() => {
     const date = options.endDate ?? endOfMonth(new Date());
     return date.toISOString();
-  }, [options.endDate?.getTime(), currentMonthKey]);
+  }, [
+    options.endDate ? options.endDate.getTime() : new Date().toISOString().slice(0, 7)
+  ]);
 
   const fetchData = useCallback(async () => {
     try {

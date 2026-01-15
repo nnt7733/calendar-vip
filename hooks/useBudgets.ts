@@ -30,14 +30,13 @@ export function useBudgets(options: UseBudgetsOptions = {}): UseBudgetsReturn {
   const [budgets, setBudgets] = useState<Budget[]>([]);
   const [loading, setLoading] = useState(true);
 
-  // Get current month key to use as dependency when no month provided
-  // This ensures the memo recomputes when the month changes
-  const currentMonthKey = new Date().toISOString().slice(0, 7);
-
   // Default to current month
+  // Use stable dependency: if month is provided, use it; otherwise use current month key
   const month = useMemo(() => {
-    return options.month ?? currentMonthKey;
-  }, [options.month, currentMonthKey]);
+    return options.month ?? new Date().toISOString().slice(0, 7);
+  }, [
+    options.month ?? new Date().toISOString().slice(0, 7)
+  ]);
 
   const fetchBudgets = useCallback(async () => {
     try {

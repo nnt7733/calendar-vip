@@ -320,14 +320,21 @@ Output schema:
 {"type":"TASK|EVENT|TRANSACTION","title":"string","date":"ISO-8601","amount":number,"category":"string","tags":["string"],"isEvent":boolean}
 
 Classification rules:
-- If input contains a monetary amount AND a spending verb (chi, mua, trả, thanh toán, ăn, uống), classify as TRANSACTION (expense).
-- If input contains a monetary amount AND an income verb (thu, nhận, lương), classify as TRANSACTION (income).
+- If input contains a monetary amount AND a spending verb (chi, mua, trả, thanh toán, ăn, uống), classify as TRANSACTION with type "TRANSACTION".
+- If input contains a monetary amount AND an income verb (thu, nhận, lương), classify as TRANSACTION with type "TRANSACTION".
 - If input has day-of-week/time but no money cues, classify as TASK or EVENT.
 - If input is a reminder without money, classify as TASK/EVENT (not TRANSACTION).
 
+IMPORTANT - Amount rules:
+- Always return positive numbers for the "amount" field (never negative).
+- The transaction type (income vs expense) is determined by the verb in the input, NOT by the amount sign.
+- For expenses: return positive amount (e.g., "chi 45k" -> amount: 45000)
+- For income: return positive amount (e.g., "thu 2tr" -> amount: 2000000)
+
 Examples:
 "thi lái xe sáng thứ 7" -> {"type":"TASK","title":"thi lái xe","date":"...","tags":["study","transport"],"isEvent":false}
-"chi 45k ăn sáng mai" -> {"type":"TRANSACTION","title":"ăn sáng","amount":45000,"date":"...","category":"Food","isEvent":false}`
+"chi 45k ăn sáng mai" -> {"type":"TRANSACTION","title":"ăn sáng","amount":45000,"date":"...","category":"Food","isEvent":false}
+"thu 2tr lương" -> {"type":"TRANSACTION","title":"lương","amount":2000000,"date":"...","category":"Salary","isEvent":false}`
         },
         {
           role: 'user',

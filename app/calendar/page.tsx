@@ -194,8 +194,17 @@ export default function CalendarPage() {
   const mergeDateWithTime = (sourceIso: string | null, targetDate: Date) => {
     if (!sourceIso) return null;
     const source = new Date(sourceIso);
+    // Create target date at midnight in local timezone
     const merged = new Date(targetDate);
-    merged.setHours(source.getHours(), source.getMinutes(), source.getSeconds(), source.getMilliseconds());
+    merged.setHours(0, 0, 0, 0);
+    // Get hours/minutes/seconds from source (already in local timezone)
+    const sourceHours = source.getHours();
+    const sourceMinutes = source.getMinutes();
+    const sourceSeconds = source.getSeconds();
+    const sourceMs = source.getMilliseconds();
+    // Set time components in local timezone
+    merged.setHours(sourceHours, sourceMinutes, sourceSeconds, sourceMs);
+    // formatISO preserves the local timezone offset correctly
     return formatISO(merged);
   };
 
