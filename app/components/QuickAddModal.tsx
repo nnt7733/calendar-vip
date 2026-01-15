@@ -15,6 +15,8 @@ interface ParsedResult {
   title: string;
   description?: string;
   date?: Date;
+  startDate?: Date;
+  endDate?: Date | null;
   amount?: number;
   category?: string;
   tags?: string[];
@@ -22,19 +24,76 @@ interface ParsedResult {
   assumptions: string[];
 }
 
+type FormType = 'TASK' | 'EVENT' | 'TRANSACTION';
+
+interface QuickAddFormData {
+  title: string;
+  type: FormType;
+  amount: string;
+  category: string;
+  startDate: string;
+  endDate: string;
+}
+
+// Normalize ParsedResult type to FormType (FINANCE_REMINDER -> TRANSACTION)
+const normalizeToFormType = (type: ParsedResult['type']): FormType => {
+  if (type === 'FINANCE_REMINDER' || type === 'TRANSACTION') {
+    return 'TRANSACTION';
+  }
+  if (type === 'TASK' || type === 'EVENT') {
+    return type;
+  }
+  return 'TASK'; // default fallback
+};
+
+const detectTransactionType = (text: string) => {
+  const lower = text.toLowerCase();
+  if (/\b(thu|nhan|luong)\b/i.test(lower)) return 'INCOME';
+  if (/\b(chi|mua|tra|uong|an|cafe)\b/i.test(lower)) return 'EXPENSE';
+  return null;
+};
+
 export default function QuickAddModal({ isOpen, onClose, onSuccess }: QuickAddModalProps) {
   const [input, setInput] = useState('');
   const [parsing, setParsing] = useState(false);
   const [parsedResult, setParsedResult] = useState<ParsedResult | null>(null);
+  const [originalParsed, setOriginalParsed] = useState<ParsedResult | null>(null);
+  const [formData, setFormData] = useState<QuickAddFormData>({
+    title: '',
+    type: 'TASK',
+    amount: '',
+    category: '',
+    startDate: '',
+    endDate: ''
+  });
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!isOpen) {
       setInput('');
       setParsedResult(null);
+      setOriginalParsed(null);
+      setFormData({
+        title: '',
+        type: 'TASK',
+        amount: '',
+        category: '',
+        startDate: '',
+        endDate: ''
+      });
       setError(null);
     }
   }, [isOpen]);
+
+  const formatDateInput = (date?: Date | null) => {
+    if (!date) return '';
+    return format(date, 'yyyy-MM-dd');
+  };
+
+  const toDate = (value: string) => {
+    if (!value) return null;
+    return new Date(`${value}T00:00:00`);
+  };
 
   const handleParse = async () => {
     if (!input.trim()) return;
@@ -92,16 +151,28 @@ export default function QuickAddModal({ isOpen, onClose, onSuccess }: QuickAddMo
       const calendarItem = hasCalendarItems ? result.create.calendarItems[0] : null;
       const transaction = hasTransactions ? result.create.transactions[0] : null;
       const previewTitle = hasTransactions
-        ? `${Math.round((transaction?.amount || 0) / 1000)}k`
+        ? (transaction?.note || input)
         : (calendarItem?.title || input);
 
       const preview: ParsedResult = {
         type: hasTransactions ? 'TRANSACTION' : (calendarItem?.type as any || 'TASK'),
         title: previewTitle,
         description: calendarItem?.description || transaction?.note || '',
-        date: calendarItem?.startAt || calendarItem?.dueAt || transaction?.dateAt 
-          ? new Date(calendarItem?.startAt || calendarItem?.dueAt || transaction?.dateAt) 
+        date: calendarItem?.startAt || calendarItem?.dueAt || transaction?.dateAt
+          ? new Date(calendarItem?.startAt || calendarItem?.dueAt || transaction?.dateAt)
           : new Date(),
+        startDate: calendarItem?.startAt
+          ? new Date(calendarItem.startAt)
+          : calendarItem?.dueAt
+            ? new Date(calendarItem.dueAt)
+            : transaction?.dateAt
+              ? new Date(transaction.dateAt)
+              : new Date(),
+        endDate: calendarItem?.endAt
+          ? new Date(calendarItem.endAt)
+          : calendarItem?.dueAt
+            ? new Date(calendarItem.dueAt)
+            : null,
         amount: transaction?.amount,
         category: transaction?.category,
         tags: calendarItem?.tags ? (Array.isArray(calendarItem.tags) ? calendarItem.tags : calendarItem.tags.split(',')) : [],
@@ -110,6 +181,15 @@ export default function QuickAddModal({ isOpen, onClose, onSuccess }: QuickAddMo
       };
 
       setParsedResult(preview);
+      setOriginalParsed(preview);
+      setFormData({
+        title: preview.title || input,
+        type: normalizeToFormType(preview.type),
+        amount: typeof preview.amount === 'number' ? String(preview.amount) : '',
+        category: preview.category || '',
+        startDate: formatDateInput(preview.startDate || preview.date),
+        endDate: formatDateInput(preview.endDate)
+      });
     } catch (err: any) {
       console.error('Parse error:', err);
       const errorMessage = err.message || 'Có lỗi xảy ra khi phân tích';
@@ -128,80 +208,97 @@ export default function QuickAddModal({ isOpen, onClose, onSuccess }: QuickAddMo
 
     setParsing(true);
     try {
-      // Get categories for transactions
-      const categoriesRes = await fetch('/api/categories');
-      const categories = await categoriesRes.json();
+      const finalType = formData.type; // Already FormType, safe to use
+      const finalCategory = formData.category.trim();
+      const startDate = toDate(formData.startDate) || new Date();
+      const endDate = toDate(formData.endDate);
 
-      // Parse again to get full data
-      const parseRes = await fetch('/api/plan', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ input })
-      });
+      // Normalize original type for comparison (FINANCE_REMINDER -> TRANSACTION)
+      const originalType = originalParsed ? normalizeToFormType(originalParsed.type) : null;
+      const originalCategory = originalParsed?.category || '';
+      const typeChanged = originalType ? finalType !== originalType : false;
+      const categoryChanged =
+        originalParsed &&
+        finalType === 'TRANSACTION' &&
+        finalCategory.toLowerCase() !== originalCategory.toLowerCase();
+      const shouldLearn = Boolean(originalParsed && (typeChanged || categoryChanged));
 
-      if (!parseRes.ok) {
-        const errorText = await parseRes.text();
-        console.error('API error response:', errorText);
-        throw new Error(`Failed to parse input: ${parseRes.status}`);
+      if (shouldLearn && formData.title.trim()) {
+        // finalType is already FormType (TRANSACTION | TASK | EVENT), safe to send
+        await fetch('/api/smart-rules', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            keyword: formData.title.trim(),
+            type: finalType,
+            category: finalType === 'TRANSACTION' ? finalCategory || undefined : undefined
+          })
+        });
       }
 
-      // Check if response is JSON
-      const contentType = parseRes.headers.get('content-type');
-      if (!contentType || !contentType.includes('application/json')) {
-        const text = await parseRes.text();
-        console.error('Non-JSON response:', text.substring(0, 200));
-        throw new Error('Server returned non-JSON response');
-      }
-
-      const result = await parseRes.json();
-
-      // Create transactions
-      if (result.create?.transactions?.length > 0) {
-        for (const trans of result.create.transactions) {
-          const matchedCategory = categories.find(
-            (cat: any) =>
-              cat.name.toLowerCase().includes(trans.category.toLowerCase()) ||
-              trans.category.toLowerCase().includes(cat.name.toLowerCase())
+      if (finalType === 'TRANSACTION') {
+        const categoriesRes = await fetch('/api/categories');
+        const categories = await categoriesRes.json();
+        const amount = Number(formData.amount || 0);
+        const matchedCategory = categories.find(
+          (cat: any) =>
+            finalCategory &&
+            (cat.name.toLowerCase().includes(finalCategory.toLowerCase()) ||
+              finalCategory.toLowerCase().includes(cat.name.toLowerCase()))
+        );
+        let categoryId = matchedCategory?.id;
+        if (!categoryId) {
+          const detectedType = detectTransactionType(input) || 'EXPENSE';
+          const defaultCategory = categories.find(
+            (cat: any) => cat.type === detectedType || cat.type === 'BOTH'
           );
-          
-          let categoryId = matchedCategory?.id;
-          if (!categoryId) {
-            const defaultCategory = categories.find(
-              (cat: any) => cat.type === trans.type || cat.type === 'BOTH'
-            );
-            categoryId = defaultCategory?.id || categories[0]?.id;
-          }
-
-          if (categoryId) {
-            await fetch('/api/transactions', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                ...trans,
-                categoryId
-              })
-            });
-          }
+          categoryId = defaultCategory?.id || categories[0]?.id;
         }
-      }
 
-      // Create calendar items
-      if (result.create?.calendarItems?.length > 0) {
-        for (const item of result.create.calendarItems) {
-          const response = await fetch('/api/calendar-items', {
+        if (categoryId) {
+          await fetch('/api/transactions', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-              ...item,
-              tags: Array.isArray(item.tags) ? item.tags : typeof item.tags === 'string' ? item.tags.split(',') : []
+              type: detectTransactionType(input) || 'EXPENSE',
+              amount,
+              currency: 'VND',
+              categoryId,
+              note: formData.title.trim() || input,
+              dateAt: startDate.toISOString()
             })
           });
-          
-          if (!response.ok) {
-            const errorData = await response.json();
-            throw new Error(errorData.message || 'Failed to create calendar item');
-          }
         }
+
+        const formattedAmount = Math.round(amount / 1000);
+        await fetch('/api/calendar-items', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            type: 'FINANCE_REMINDER',
+            title: `${formattedAmount}k`,
+            description: formData.title.trim() || input,
+            startAt: startDate.toISOString(),
+            endAt: null,
+            dueAt: startDate.toISOString(),
+            tags: parsedResult.tags || []
+          })
+        });
+      } else {
+        await fetch('/api/calendar-items', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            type: finalType,
+            title: formData.title.trim() || input,
+            description: 'Tạo từ Quick Add',
+            startAt: startDate.toISOString(),
+            endAt: finalType === 'EVENT' ? (endDate || startDate).toISOString() : null,
+            dueAt: finalType === 'TASK' ? (endDate || startDate).toISOString() : null,
+            tags: parsedResult.tags || [],
+            status: finalType === 'TASK' ? 'TODO' : undefined
+          })
+        });
       }
 
       // Refresh data
@@ -290,7 +387,7 @@ export default function QuickAddModal({ isOpen, onClose, onSuccess }: QuickAddMo
           {parsedResult && (
             <div className="rounded-xl border border-slate-700 bg-slate-800/50 p-4">
               <div className="mb-3 flex items-center justify-between">
-                <h3 className="text-sm font-semibold text-white">Preview</h3>
+                <h3 className="text-sm font-semibold text-white">Chỉnh sửa kết quả</h3>
                 <span
                   className={`rounded-full px-2 py-1 text-xs font-medium ${
                     parsedResult.confidence === 'high'
@@ -304,48 +401,88 @@ export default function QuickAddModal({ isOpen, onClose, onSuccess }: QuickAddMo
                 </span>
               </div>
 
-              <div className="space-y-3">
-                {/* Type */}
-                <div className="flex items-center gap-2">
-                  {parsedResult.type === 'TASK' && <CheckSquare className="h-4 w-4 text-blue-400" />}
-                  {parsedResult.type === 'EVENT' && <Calendar className="h-4 w-4 text-purple-400" />}
-                  {parsedResult.type === 'TRANSACTION' && <DollarSign className="h-4 w-4 text-green-400" />}
-                  <span className="text-sm font-medium text-slate-300">{parsedResult.type}</span>
-                </div>
-
+              <div className="space-y-4">
                 {/* Title */}
                 <div>
-                  <p className="text-xs text-slate-400 mb-1">Tiêu đề</p>
-                  <p className="text-sm font-semibold text-white">{parsedResult.title}</p>
+                  <label className="mb-1 block text-xs text-slate-400">Title</label>
+                  <input
+                    value={formData.title}
+                    onChange={(e) => setFormData({ ...formData, title: e.target.value })}
+                    className="w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-200 focus:border-primary focus:outline-none"
+                  />
                 </div>
 
-                {/* Date */}
-                {parsedResult.date && (
-                  <div>
-                    <p className="text-xs text-slate-400 mb-1">Thời gian</p>
-                    <p className="text-sm text-slate-300">
-                      {format(parsedResult.date, 'EEEE, MMMM d, yyyy HH:mm')}
-                    </p>
+                {/* Type */}
+                <div>
+                  <label className="mb-1 block text-xs text-slate-400">Type</label>
+                  <div className="flex items-center gap-2">
+                    {formData.type === 'TASK' && <CheckSquare className="h-4 w-4 text-blue-400" />}
+                    {formData.type === 'EVENT' && <Calendar className="h-4 w-4 text-purple-400" />}
+                    {formData.type === 'TRANSACTION' && <DollarSign className="h-4 w-4 text-green-400" />}
+                    <select
+                      value={formData.type}
+                      onChange={(e) => setFormData({ ...formData, type: e.target.value as FormType })}
+                      className="rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-200 focus:border-primary focus:outline-none"
+                    >
+                      <option value="TASK">Task</option>
+                      <option value="EVENT">Event</option>
+                      <option value="TRANSACTION">Finance</option>
+                    </select>
                   </div>
-                )}
+                </div>
 
                 {/* Amount */}
-                {parsedResult.amount && (
+                {formData.type === 'TRANSACTION' && (
                   <div>
-                    <p className="text-xs text-slate-400 mb-1">Số tiền</p>
-                    <p className="text-sm font-semibold text-green-400">
-                      {Math.round(parsedResult.amount / 1000)}k
-                    </p>
+                    <label className="mb-1 block text-xs text-slate-400">Amount</label>
+                    <input
+                      type="number"
+                      value={formData.amount}
+                      onChange={(e) => setFormData({ ...formData, amount: e.target.value })}
+                      className="w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-200 focus:border-primary focus:outline-none"
+                    />
                   </div>
                 )}
 
                 {/* Category */}
-                {parsedResult.category && (
+                {formData.type === 'TRANSACTION' && (
                   <div>
-                    <p className="text-xs text-slate-400 mb-1">Danh mục</p>
-                    <p className="text-sm text-slate-300">{parsedResult.category}</p>
+                    <label className="mb-1 block text-xs text-slate-400">Category</label>
+                    <input
+                      value={formData.category}
+                      onChange={(e) => setFormData({ ...formData, category: e.target.value })}
+                      className="w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-200 focus:border-primary focus:outline-none"
+                    />
                   </div>
                 )}
+
+                {/* Dates */}
+                <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                  <div>
+                    <label className="mb-1 block text-xs text-slate-400">
+                      {formData.type === 'TRANSACTION' ? 'Date' : 'Start Date'}
+                    </label>
+                    <input
+                      type="date"
+                      value={formData.startDate}
+                      onChange={(e) => setFormData({ ...formData, startDate: e.target.value })}
+                      className="w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-200 focus:border-primary focus:outline-none"
+                    />
+                  </div>
+                  {formData.type !== 'TRANSACTION' && (
+                    <div>
+                      <label className="mb-1 block text-xs text-slate-400">
+                        {formData.type === 'EVENT' ? 'End Date' : 'Due Date'}
+                      </label>
+                      <input
+                        type="date"
+                        value={formData.endDate}
+                        onChange={(e) => setFormData({ ...formData, endDate: e.target.value })}
+                        className="w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-200 focus:border-primary focus:outline-none"
+                      />
+                    </div>
+                  )}
+                </div>
 
                 {/* Tags */}
                 {parsedResult.tags && parsedResult.tags.length > 0 && (

@@ -18,7 +18,7 @@ import {
   isPast,
   isToday
 } from 'date-fns';
-import { ChevronLeft, ChevronRight, Plus, Star, DollarSign, CheckSquare } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Plus, Star, DollarSign, CheckSquare, Play, Flag } from 'lucide-react';
 import { DndContext, DragEndEvent, useDraggable, useDroppable } from '@dnd-kit/core';
 import { CSS } from '@dnd-kit/utilities';
 import { useCalendarData, CalendarItem, Transaction } from '@/hooks/useCalendarData';
@@ -72,6 +72,35 @@ const getDaysUntilDue = (dueAt: string | null): number | null => {
   due.setHours(0, 0, 0, 0);
   const diff = differenceInDays(due, today);
   return diff;
+};
+
+const toDayStart = (date: Date) => {
+  const value = new Date(date);
+  value.setHours(0, 0, 0, 0);
+  return value;
+};
+
+const getItemDateRange = (item: CalendarItem) => {
+  const startCandidate = item.startAt || item.dueAt || item.endAt;
+  const endCandidate = item.endAt || item.dueAt || item.startAt;
+  if (!startCandidate && !endCandidate) return null;
+  const start = toDayStart(new Date(startCandidate || endCandidate!));
+  const end = toDayStart(new Date(endCandidate || startCandidate!));
+  if (start > end) {
+    return { start: end, end: start };
+  }
+  return { start, end };
+};
+
+const getSpanStatusForDate = (item: CalendarItem, date: Date) => {
+  const range = getItemDateRange(item);
+  if (!range) return null;
+  const day = toDayStart(date);
+  if (day < range.start || day > range.end) return null;
+  if (isSameDay(range.start, range.end)) return 'single';
+  if (isSameDay(day, range.start)) return 'start';
+  if (isSameDay(day, range.end)) return 'end';
+  return 'middle';
 };
 
 type DraggableCalendarItemProps = {
@@ -162,13 +191,7 @@ export default function CalendarPage() {
     });
 
     return filteredItems.filter((item) => {
-      if (item.startAt) {
-        return isSameDay(new Date(item.startAt), date);
-      }
-      if (item.dueAt) {
-        return isSameDay(new Date(item.dueAt), date);
-      }
-      return false;
+      return Boolean(getSpanStatusForDate(item, date));
     });
   };
 
@@ -415,11 +438,21 @@ export default function CalendarPage() {
                           const priority = getItemPriority(item.tags);
                           const daysUntilDue = getDaysUntilDue(item.dueAt);
                           const isHighPriority = priority === 'high';
+                          const spanStatus = getSpanStatusForDate(item, day);
+                          const isSpanMiddle = spanStatus === 'middle';
+                          const displayTitle =
+                            spanStatus === 'start'
+                              ? `Start: ${item.title}`
+                              : spanStatus === 'end'
+                                ? `Due: ${item.title}`
+                                : spanStatus === 'middle'
+                                  ? `${item.title} (cont.)`
+                                  : item.title;
                           return (
                             <DraggableCalendarItem
                               key={item.id}
                               item={item}
-                              className={`text-xs px-2 py-1 rounded border truncate flex items-center gap-1 ${getItemColor(
+                              className={`text-xs px-2 ${isSpanMiddle ? 'py-0.5 opacity-70' : 'py-1'} rounded border truncate flex items-center gap-1 ${getItemColor(
                                 item.type,
                                 item.status,
                                 daysUntilDue,
@@ -430,8 +463,10 @@ export default function CalendarPage() {
                               {isHighPriority && (
                                 <Star className="h-2.5 w-2.5 fill-yellow-400 text-yellow-400" />
                               )}
+                              {spanStatus === 'start' && <Play className="h-2.5 w-2.5" />}
+                              {spanStatus === 'end' && <Flag className="h-2.5 w-2.5" />}
                               {item.type === 'FINANCE_REMINDER' && <DollarSign className="h-2.5 w-2.5" />}
-                              {item.title}
+                              {displayTitle}
                               {daysUntilDue !== null && daysUntilDue >= 0 && (
                                 <span className="ml-auto text-[10px] opacity-75">
                                   {daysUntilDue === 0 ? 'Today' : `${daysUntilDue}d`}

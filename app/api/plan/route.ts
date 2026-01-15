@@ -123,7 +123,7 @@ export async function POST(request: Request) {
 
     let result;
     try {
-      result = await quickAddParser(parsed.input);
+      result = await quickAddParser(parsed.input, userId);
     } catch (error) {
       await prisma.settings.update({
         where: { userId },

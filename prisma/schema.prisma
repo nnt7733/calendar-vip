@@ -84,3 +84,13 @@ model Settings {
 
   @@index([userId])
 }
+
+model SmartKeyword {
+  id             String   @id @default(cuid())
+  keyword        String   @unique
+  mappedType     String   // TRANSACTION | TASK | EVENT
+  mappedCategory String?
+  userId         String
+
+  @@index([userId])
+}

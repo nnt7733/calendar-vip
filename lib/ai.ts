@@ -360,7 +360,104 @@ Examples:
   }
 }
 
-export async function quickAddParser(input: string) {
+type SmartRuleMatch = {
+  mappedType: 'TRANSACTION' | 'TASK' | 'EVENT';
+  mappedCategory: string | null;
+};
+
+async function findSmartRuleMatch(
+  input: string,
+  userId?: string
+): Promise<SmartRuleMatch | null> {
+  if (!userId) return null;
+  try {
+    const { prisma } = await import('@/lib/db');
+    const rules = await prisma.smartKeyword.findMany({
+      where: { userId }
+    });
+    if (!rules.length) return null;
+    const normalizedInput = normalizeText(input);
+    const matched = rules
+      .map((rule) => ({
+        rule,
+        normalizedKeyword: normalizeText(rule.keyword)
+      }))
+      .filter((entry) => entry.normalizedKeyword.length > 0)
+      .filter((entry) => normalizedInput.includes(entry.normalizedKeyword))
+      .sort((a, b) => b.normalizedKeyword.length - a.normalizedKeyword.length)[0];
+
+    if (!matched) return null;
+    return {
+      mappedType: matched.rule.mappedType as SmartRuleMatch['mappedType'],
+      mappedCategory: matched.rule.mappedCategory
+    };
+  } catch (error) {
+    console.error('Smart rule lookup error:', error);
+    return null;
+  }
+}
+
+export async function quickAddParser(input: string, userId?: string) {
+  const smartRule = await findSmartRuleMatch(input, userId);
+  if (smartRule) {
+    const amount = detectAmount(input);
+    const tags = detectTags(input);
+    const isEvent = smartRule.mappedType === 'EVENT';
+    const date = detectDate(input, isEvent);
+    const formattedAmount = Math.round((amount || 0) / 1000);
+    const category = smartRule.mappedCategory || detectCategory(input);
+
+    const isFinance = smartRule.mappedType === 'TRANSACTION';
+    const transactionType = detectType(input) || 'EXPENSE';
+
+    const transactions = isFinance
+      ? [
+          {
+            type: transactionType,
+            amount: amount || 0,
+            currency: 'VND',
+            category,
+            note: input,
+            dateAt: formatISO(date)
+          }
+        ]
+      : [];
+
+    const calendarItems = isFinance
+      ? [
+          {
+            type: 'FINANCE_REMINDER',
+            title: `${formattedAmount}k`,
+            description: input,
+            startAt: formatISO(date),
+            endAt: null,
+            dueAt: formatISO(date),
+            tags: tags.join(',')
+          }
+        ]
+      : [
+          {
+            type: isEvent ? 'EVENT' : 'TASK',
+            title: extractCleanTitle(input),
+            description: 'Tạo từ Smart Learning',
+            startAt: formatISO(date),
+            endAt: null,
+            dueAt: isEvent ? null : formatISO(date),
+            tags: Array.isArray(tags) ? tags.join(',') : tags,
+            status: 'TODO'
+          }
+        ];
+
+    return {
+      clarifyingQuestion: null,
+      assumptions: ['Đã sử dụng Smart Learning để parse.'],
+      create: {
+        calendarItems,
+        transactions
+      }
+    };
+  }
+
   // Try AI parsing first (if available)
   const aiResult = await parseWithAI(input);
   
