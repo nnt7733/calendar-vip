@@ -2,13 +2,17 @@ import { clerkMiddleware } from "@clerk/nextjs/server";
 import { NextResponse } from "next/server";
 
 export default clerkMiddleware(async (auth, req) => {
-  if (process.env.NODE_ENV !== 'production') {
+  // In development, allow all requests to pass through
+  if (process.env.NODE_ENV === 'development' || !process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY) {
     return NextResponse.next();
   }
 
   const { userId } = await auth();
   if (!userId) {
-    return NextResponse.redirect(new URL('/sign-in', req.url));
+    // Only redirect to sign-in if not already on sign-in page
+    if (!req.url.includes('/sign-in')) {
+      return NextResponse.redirect(new URL('/sign-in', req.url));
+    }
   }
 
   return NextResponse.next();
